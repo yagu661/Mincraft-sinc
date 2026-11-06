@@ -20,13 +20,15 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant Execute Permission for Gradlew
+    - name: Setup Gradle 8.7
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '8.7'
+
+    - name: Prepare Gradle 8.7 Wrapper
       run: |
-        if [ ! -f gradlew ]; then
-          gradle wrapper
-        fi
+        gradle wrapper --gradle-version 8.7 --distribution-type bin
         chmod +x gradlew
 
     - name: Run Unit Tests
