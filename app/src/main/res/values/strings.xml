@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Minecraft GitSync</string>
+    <string name="desc_logo">Minecraft GitSync Logo</string>
+    <string name="btn_push">PUSH NOW</string>
+    <string name="btn_pull">PULL NOW</string>
+    <string name="btn_retry">RETRY SYNC</string>
+    <string name="btn_backup">FORCE BACKUP</string>
+    <string name="btn_restore">RESTORE VERSION</string>
+    <string name="btn_errors">SHOW ERRORS</string>
+    
+    <!-- Notifications -->
+    <string name="channel_sync_name">Minecraft World Synchronization</string>
+    <string name="channel_sync_desc">Notifications for ongoing WebRTC transfers and world backups</string>
+    <string name="notif_sync_in_progress">Synchronizing Minecraft World…</string>
+    <string name="notif_sync_completed">World synchronized successfully</string>
+    <string name="notif_sync_divergence">Branch conflict detected between devices</string>
+    <string name="notif_world_ready_import">New .mcworld snapshot ready to import</string>
+</resources>

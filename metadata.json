@@ -1,0 +1,6 @@
+{
+  "name": "Minecraft GitSync",
+  "description": "Native Android application and WebRTC signaling engine for automatic peer-to-peer Minecraft Bedrock world synchronization between two players.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

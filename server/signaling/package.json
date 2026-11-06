@@ -1,0 +1,21 @@
+{
+  "name": "minecraft-gitsync-signaling",
+  "version": "1.0.0",
+  "description": "Authenticated lightweight WebRTC signaling service for Minecraft GitSync",
+  "main": "server.ts",
+  "scripts": {
+    "start": "tsx server.ts",
+    "dev": "tsx watch server.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.5"
+  }
+}
