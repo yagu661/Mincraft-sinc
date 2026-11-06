@@ -32,19 +32,19 @@ object DivergenceDetector {
             return SyncRelationship.UP_TO_DATE
         }
 
-        // 2. Already present in local commit history
-        if (localHistory.any { it.commitId == incoming.commitId }) {
-            return SyncRelationship.UP_TO_DATE
-        }
-
-        // 3. Fast-Forward: Incoming parent is directly the current local head
+        // 2. Fast-Forward: Incoming parent is directly the current local head
         if (incoming.parentCommitId == localHead.commitId) {
             return SyncRelationship.FAST_FORWARD
         }
 
-        // 4. Check if incoming commit is an ancestor of local head (remote sent older commit)
+        // 3. Check if incoming commit is an ancestor of local head (remote sent older commit)
         if (isAncestorOf(potentialAncestorId = incoming.commitId, descendant = localHead, history = localHistory)) {
             return SyncRelationship.OUTDATED_REMOTE
+        }
+
+        // 4. Already present in local commit history
+        if (localHistory.any { it.commitId == incoming.commitId }) {
+            return SyncRelationship.UP_TO_DATE
         }
 
         // 5. If localHead was built on top of incoming's parent or they share common ancestor
