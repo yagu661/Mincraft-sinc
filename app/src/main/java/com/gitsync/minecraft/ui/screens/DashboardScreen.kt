@@ -148,6 +148,24 @@ fun DashboardScreen(
         }
 
         item {
+            DashboardNavCard(
+                icon = Icons.Default.PhoneAndroid,
+                title = "Android 11 Storage Diagnostics & Worlds",
+                subtitle = "Samsung Galaxy M30s audit • Path verification & non-destructive test backup",
+                onClick = { onNavigate(AppScreen.STORAGE_DIAGNOSTIC) }
+            )
+        }
+
+        item {
+            DashboardNavCard(
+                icon = Icons.Default.Groups,
+                title = "3-Device Sync Group & Editing Lease",
+                subtitle = "Owner (Device A), Friend Phone 1 (Device B), Friend Phone 2 (Device C) • Single player lock",
+                onClick = { onNavigate(AppScreen.SYNC_GROUP) }
+            )
+        }
+
+        item {
             WorldInfoCard(
                 storageCapability = storageCapability,
                 onClick = { onNavigate(AppScreen.STORAGE_SETUP) }

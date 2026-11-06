@@ -11,14 +11,18 @@ android {
     defaultConfig {
         applicationId = "com.gitsync.minecraft"
         minSdk = 26
-        targetSdk = 34
+        // Experimental Android 11 legacy-storage compatibility build (Target SDK 29 + requestLegacyExternalStorage)
+        targetSdk = 29
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "1.1.0-compat"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        buildConfigField("String", "TARGET_DEVICE_PROFILE", "\"Samsung Galaxy M30s - Android 11 Compat\"")
+        buildConfigField("String", "MINECRAFT_EXPECTED_PATH", "\"/storage/emulated/0/Android/data/com.mojang.minecraftpe/files/games/com.mojang/minecraftWorlds/\"")
 
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
@@ -50,6 +54,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

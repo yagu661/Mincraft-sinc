@@ -64,6 +64,31 @@ fun AppNavigation(viewModel: MainViewModel) {
                 onRetrySync = { viewModel.pullNow() }
             )
         }
+        AppScreen.STORAGE_DIAGNOSTIC -> {
+            val diagnostic by viewModel.storageDiagnostic.collectAsState()
+            val worlds by viewModel.discoveredWorlds.collectAsState()
+            val selectedWorldId by viewModel.selectedWorldId.collectAsState()
+            StorageDiagnosticScreen(
+                diagnostic = diagnostic,
+                discoveredWorlds = worlds,
+                selectedWorldId = selectedWorldId,
+                onSelectWorld = { viewModel.selectSharedWorld(it) },
+                onRunSafeTestBackup = { viewModel.runSafeTestBackup() },
+                onRerunDiagnostic = { viewModel.refreshStorageCapabilities() },
+                onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
+            )
+        }
+        AppScreen.SYNC_GROUP -> {
+            val syncGroup by viewModel.syncGroup.collectAsState()
+            val deviceSwitchingResult by viewModel.deviceSwitchingResult.collectAsState()
+            SyncGroupScreen(
+                syncGroup = syncGroup,
+                deviceSwitchingResult = deviceSwitchingResult,
+                onAcquireLease = { viewModel.acquireWorldLease() },
+                onReleaseLease = { viewModel.releaseWorldLease() },
+                onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
+            )
+        }
         AppScreen.STORAGE_SETUP -> {
             StorageSetupScreen(
                 storageCapability = storageCapability,
