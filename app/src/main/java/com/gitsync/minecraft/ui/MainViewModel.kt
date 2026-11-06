@@ -221,7 +221,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val archiver = com.gitsync.minecraft.core.storage.WorldArchiver(app)
             val snapshot = archiver.archiveLocalWorld(sampleFolder, "sample_bedrock_world", "GitSync Survival Test")
-            backupEngine.createSnapshotForWorld("sample_bedrock_world", "Genesis commit for test mode")
+            kotlinx.coroutines.runBlocking {
+                backupEngine.createSnapshotForWorld("sample_bedrock_world", "Genesis commit for test mode")
+            }
 
             refreshStorageCapabilities()
             "Sample test world created successfully with SHA-256: ${snapshot.getOrNull()?.sha256?.take(8)}"
