@@ -8,15 +8,17 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [
         CommitEntity::class,
-        SyncQueueEntity::class
+        SyncQueueEntity::class,
+        SharedWorldEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun commitDao(): CommitDao
     abstract fun syncQueueDao(): SyncQueueDao
+    abstract fun sharedWorldDao(): SharedWorldDao
 
     companion object {
         @Volatile

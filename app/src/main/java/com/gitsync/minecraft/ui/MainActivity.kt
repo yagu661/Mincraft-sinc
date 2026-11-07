@@ -49,6 +49,10 @@ fun AppNavigation(viewModel: MainViewModel) {
     val commits by viewModel.commitHistory.collectAsState()
     val latestCommit = commits.firstOrNull()?.toModel()
 
+    val discoveredWorlds by viewModel.discoveredWorlds.collectAsState()
+    val sharedWorlds by viewModel.sharedWorlds.collectAsState()
+    val activeSharedWorld by viewModel.activeSharedWorld.collectAsState()
+
     when (currentScreen) {
         AppScreen.DASHBOARD -> {
             DashboardScreen(
@@ -103,6 +107,23 @@ fun AppNavigation(viewModel: MainViewModel) {
                 syncState = syncState,
                 onPair = { id, name, token -> viewModel.pairWithFriend(id, name, token) },
                 onUnpair = { viewModel.unpair() },
+                onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
+            )
+        }
+        AppScreen.WORLD_PAIRING -> {
+            WorldPairingScreen(
+                discoveredWorlds = discoveredWorlds,
+                sharedWorlds = sharedWorlds,
+                activeSharedWorld = activeSharedWorld,
+                storageCapability = storageCapability,
+                onCreateSharedWorld = { viewModel.createSharedWorldFromLocal(it) },
+                onLinkExistingWorld = { id, world -> viewModel.linkExistingLocalWorldToShared(id, world) },
+                onDownloadNewWorld = { id, name -> viewModel.createNewWorldFromSharedBackup(id, name) },
+                onUnpairSharedWorld = { viewModel.unpairSharedWorld(it) },
+                onChangeActiveWorld = { viewModel.changeActiveSharedWorld(it) },
+                onUpdateMultiplayerMode = { viewModel.updateMultiplayerMode(it) },
+                onSelectSafFolder = { viewModel.navigateTo(AppScreen.STORAGE_SETUP) },
+                onRefreshWorlds = { viewModel.scanWorlds() },
                 onBack = { viewModel.navigateTo(AppScreen.DASHBOARD) }
             )
         }

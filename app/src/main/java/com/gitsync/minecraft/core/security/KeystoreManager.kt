@@ -27,6 +27,7 @@ class KeystoreManager(private val context: Context) {
         private const val DEFAULT_ROOM_ID = "friendgroup123"
         private const val KEY_STORAGE_URL = "storage_url"
         private const val DEFAULT_STORAGE_URL = "https://spring-paper-f60a.xmenlittlegamer.workers.dev"
+        private const val KEY_ACTIVE_SHARED_WORLD_ID = "active_shared_world_id"
     }
 
     private val securePrefs: SharedPreferences by lazy {
@@ -119,5 +120,16 @@ class KeystoreManager(private val context: Context) {
 
     fun setStorageUrl(url: String) {
         securePrefs.edit().putString(KEY_STORAGE_URL, url.trim()).apply()
+    }
+
+    fun getActiveSharedWorldId(): String? =
+        securePrefs.getString(KEY_ACTIVE_SHARED_WORLD_ID, null)
+
+    fun setActiveSharedWorldId(sharedWorldId: String?) {
+        if (sharedWorldId == null) {
+            securePrefs.edit().remove(KEY_ACTIVE_SHARED_WORLD_ID).apply()
+        } else {
+            securePrefs.edit().putString(KEY_ACTIVE_SHARED_WORLD_ID, sharedWorldId.trim()).apply()
+        }
     }
 }

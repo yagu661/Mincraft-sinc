@@ -149,6 +149,15 @@ fun DashboardScreen(
 
         item {
             DashboardNavCard(
+                icon = Icons.Default.Public,
+                title = "World Pairing & Shared Co-op Modes",
+                subtitle = "Select host world • Link local copy or download • 3 Modes (Online Co-op, Host Offline, Friend Offline)",
+                onClick = { onNavigate(AppScreen.WORLD_PAIRING) }
+            )
+        }
+
+        item {
+            DashboardNavCard(
                 icon = Icons.Default.PhoneAndroid,
                 title = "Android 11 Storage Diagnostics & Worlds",
                 subtitle = "Samsung Galaxy M30s audit • Path verification & non-destructive test backup",

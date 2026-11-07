@@ -30,6 +30,7 @@ enum class AppScreen {
     STORAGE_DIAGNOSTIC,
     SYNC_GROUP,
     PAIRING,
+    WORLD_PAIRING,
     HISTORY,
     CONFLICT,
     SETTINGS,
@@ -80,12 +81,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .getCommitsForWorldFlow(selectedWorldId.value ?: "SurvivalWorld")
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    val sharedWorlds: StateFlow<List<SharedWorldEntity>> = app.database.sharedWorldDao()
+        .getAllSharedWorldsFlow()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val activeSharedWorld: StateFlow<SharedWorldMapping?> = MutableStateFlow<SharedWorldMapping?>(null)
+
     init {
         syncEngine.start()
         sessionMonitor.startMonitoring()
         refreshStorageCapabilities()
         scanWorlds()
+        loadActiveSharedWorld()
         verifyDeviceReadiness()
+    }
+
+    private fun loadActiveSharedWorld() {
+        viewModelScope.launch {
+            val activeId = app.keystoreManager.getActiveSharedWorldId()
+            if (activeId != null) {
+                val entity = app.database.sharedWorldDao().getMappingBySharedId(activeId)
+                if (entity != null) {
+                    _selectedWorldId.value = entity.localFolderId
+                    (activeSharedWorld as MutableStateFlow).value = entity.toModel()
+                }
+            }
+        }
     }
 
     fun navigateTo(screen: AppScreen) {
@@ -105,17 +126,157 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val legacyDir = File(StorageDiagnosticHelper.LEGACY_MINECRAFT_WORLDS_PATH)
             val targetDir = if (primaryDir.exists()) primaryDir else legacyDir
 
-            val worlds = worldDiscovery.scanLocalMinecraftWorlds(targetDir)
+            val worlds = mutableListOf<DiscoveredWorld>()
+            if (targetDir.exists()) {
+                worlds.addAll(worldDiscovery.scanLocalMinecraftWorlds(targetDir))
+            }
+
+            // Also check SAF tree if authorized
+            val cap = detector.detectCapabilities()
+            if (cap.authorizedTreeUri != null) {
+                val safWorlds = worldDiscovery.scanSafMinecraftWorlds(cap.authorizedTreeUri)
+                // Filter out any duplicates
+                safWorlds.forEach { sw ->
+                    if (worlds.none { it.folderName == sw.folderName }) {
+                        worlds.add(sw)
+                    }
+                }
+            }
+
             _discoveredWorlds.value = worlds
-            if (worlds.isNotEmpty() && _selectedWorldId.value == null) {
-                _selectedWorldId.value = worlds.first().worldId
+            val currentActive = app.keystoreManager.getActiveSharedWorldId()
+            if (currentActive == null && worlds.isNotEmpty() && _selectedWorldId.value == null) {
+                // Do not auto-pair; user must explicitly select world in World Pairing screen
             }
         }
     }
 
     fun selectSharedWorld(world: DiscoveredWorld) {
-        _selectedWorldId.value = world.worldId
+        _selectedWorldId.value = world.folderName
         verifyDeviceReadiness()
+    }
+
+    /**
+     * Mode 1 Host: Generate a persistent unique shared World ID, link the selected local world,
+     * and generate a secure pairing code for friend.
+     */
+    fun createSharedWorldFromLocal(world: DiscoveredWorld): SharedWorldMapping {
+        val uniqueSharedId = "sw_${java.util.UUID.randomUUID().toString().replace("-", "").take(12)}"
+        val token = com.gitsync.minecraft.core.security.PairingTokenGenerator.generateSecureToken()
+        val pairingCode = "MWPAIR:$uniqueSharedId:$token"
+        val mapping = SharedWorldMapping(
+            sharedWorldId = uniqueSharedId,
+            localFolderId = world.folderName,
+            displayName = world.displayName,
+            localAbsolutePath = world.absolutePath,
+            pairingCode = pairingCode,
+            isHostDevice = true,
+            activeMultiplayerMode = MultiplayerSyncMode.MODE_1_HOST_READY
+        )
+
+        viewModelScope.launch {
+            app.database.sharedWorldDao().insertOrUpdateMapping(SharedWorldEntity.fromModel(mapping))
+            app.keystoreManager.setActiveSharedWorldId(uniqueSharedId)
+            _selectedWorldId.value = world.folderName
+            (activeSharedWorld as MutableStateFlow).value = mapping
+        }
+        return mapping
+    }
+
+    /**
+     * Mode 2 / Friend Option A: Link an existing local Minecraft world to the shared World ID.
+     */
+    fun linkExistingLocalWorldToShared(
+        sharedWorldId: String,
+        localWorld: DiscoveredWorld,
+        friendDeviceId: String? = null,
+        friendDeviceName: String? = null
+    ) {
+        val mapping = SharedWorldMapping(
+            sharedWorldId = sharedWorldId,
+            localFolderId = localWorld.folderName,
+            displayName = localWorld.displayName,
+            localAbsolutePath = localWorld.absolutePath,
+            pairingCode = "LINKED",
+            pairedDeviceId = friendDeviceId,
+            pairedDeviceName = friendDeviceName,
+            isHostDevice = false,
+            activeMultiplayerMode = MultiplayerSyncMode.MODE_2_HOST_OFFLINE
+        )
+
+        viewModelScope.launch {
+            app.database.sharedWorldDao().insertOrUpdateMapping(SharedWorldEntity.fromModel(mapping))
+            app.keystoreManager.setActiveSharedWorldId(sharedWorldId)
+            _selectedWorldId.value = localWorld.folderName
+            (activeSharedWorld as MutableStateFlow).value = mapping
+            verifyDeviceReadiness()
+        }
+    }
+
+    /**
+     * Mode 2 / Friend Option B: Download and create a new world from the shared backup.
+     */
+    fun createNewWorldFromSharedBackup(
+        sharedWorldId: String,
+        targetDisplayName: String
+    ) {
+        viewModelScope.launch {
+            val safeFolderName = targetDisplayName.replace("[^a-zA-Z0-9_-]".toRegex(), "_") + "_" + System.currentTimeMillis().toString().takeLast(4)
+            val worldsDir = if (MinecraftStorageDetector.LEGACY_WORLDS_DIR.exists() && MinecraftStorageDetector.LEGACY_WORLDS_DIR.canWrite()) {
+                MinecraftStorageDetector.LEGACY_WORLDS_DIR
+            } else {
+                MinecraftStorageDetector.SCOPED_WORLDS_DIR
+            }
+            val targetFolder = File(worldsDir, safeFolderName)
+            targetFolder.mkdirs()
+
+            val mapping = SharedWorldMapping(
+                sharedWorldId = sharedWorldId,
+                localFolderId = safeFolderName,
+                displayName = targetDisplayName,
+                localAbsolutePath = targetFolder.absolutePath,
+                pairingCode = "DOWNLOAD_PENDING",
+                isHostDevice = false,
+                activeMultiplayerMode = MultiplayerSyncMode.MODE_2_HOST_OFFLINE
+            )
+            app.database.sharedWorldDao().insertOrUpdateMapping(SharedWorldEntity.fromModel(mapping))
+            app.keystoreManager.setActiveSharedWorldId(sharedWorldId)
+            _selectedWorldId.value = safeFolderName
+            (activeSharedWorld as MutableStateFlow).value = mapping
+
+            // Trigger immediate pull from Cloudflare R2
+            syncEngine.pullLatest(sharedWorldId)
+            scanWorlds()
+        }
+    }
+
+    fun unpairSharedWorld(sharedWorldId: String) {
+        viewModelScope.launch {
+            app.database.sharedWorldDao().deleteMapping(sharedWorldId)
+            if (app.keystoreManager.getActiveSharedWorldId() == sharedWorldId) {
+                app.keystoreManager.setActiveSharedWorldId(null)
+                _selectedWorldId.value = null
+                (activeSharedWorld as MutableStateFlow).value = null
+            }
+        }
+    }
+
+    fun changeActiveSharedWorld(mapping: SharedWorldMapping) {
+        viewModelScope.launch {
+            app.keystoreManager.setActiveSharedWorldId(mapping.sharedWorldId)
+            _selectedWorldId.value = mapping.localFolderId
+            (activeSharedWorld as MutableStateFlow).value = mapping
+            verifyDeviceReadiness()
+        }
+    }
+
+    fun updateMultiplayerMode(mode: MultiplayerSyncMode) {
+        val current = activeSharedWorld.value ?: return
+        viewModelScope.launch {
+            val updated = current.copy(activeMultiplayerMode = mode)
+            app.database.sharedWorldDao().updateMultiplayerMode(current.sharedWorldId, mode.name)
+            (activeSharedWorld as MutableStateFlow).value = updated
+        }
     }
 
     fun verifyDeviceReadiness() {
