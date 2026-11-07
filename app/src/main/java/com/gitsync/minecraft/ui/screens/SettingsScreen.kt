@@ -28,6 +28,9 @@ fun SettingsScreen(
     val app = context.applicationContext as GitSyncApplication
     var gracePeriodSec by remember { mutableStateOf(8f) }
     var signalingUrl by remember { mutableStateOf(app.keystoreManager.getSignalingServerUrl()) }
+    var roomId by remember { mutableStateOf(app.keystoreManager.getRoomId()) }
+    var storageUrl by remember { mutableStateOf(app.keystoreManager.getStorageUrl()) }
+    var saveStatus by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         containerColor = GraphiteBackground,
@@ -140,30 +143,64 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "SIGNALING SERVICE ENDPOINT",
+                            text = "CLOUDFLARE BACKEND CONFIGURATION",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextMuted,
                             fontFamily = FontFamily.Monospace
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         OutlinedTextField(
                             value = signalingUrl,
                             onValueChange = { signalingUrl = it },
-                            label = { Text("Signaling WebSocket URL") },
+                            label = { Text("Cloudflare WebSocket URL") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = roomId,
+                            onValueChange = { roomId = it },
+                            label = { Text("Sync Room ID") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = storageUrl,
+                            onValueChange = { storageUrl = it },
+                            label = { Text("Cloudflare Storage (R2) HTTP URL") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         Button(
                             onClick = {
                                 app.keystoreManager.setSignalingServerUrl(signalingUrl)
+                                app.keystoreManager.setRoomId(roomId)
+                                app.keystoreManager.setStorageUrl(storageUrl)
+                                app.syncEngine.start()
+                                saveStatus = "Cloudflare settings saved! Reconnecting room..."
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("SAVE SIGNALING URL", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("SAVE & RECONNECT ROOM", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        if (saveStatus != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = saveStatus!!,
+                                color = EmeraldLight,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
                     }
                 }

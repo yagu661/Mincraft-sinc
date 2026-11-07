@@ -242,6 +242,16 @@ private fun StatusHeaderCard(
                     )
                 }
 
+                val statusText = when {
+                    syncState.currentSyncStatus == SyncStatus.PUSHING || syncState.currentSyncStatus == SyncStatus.RECEIVING -> "SYNCING"
+                    syncState.currentSyncStatus == SyncStatus.SYNCED -> "UP TO DATE"
+                    syncState.currentSyncStatus == SyncStatus.CONFLICT -> "CONFLICT DETECTED"
+                    syncState.currentSyncStatus == SyncStatus.FAILED -> "BACKUP FAILED"
+                    !syncState.isLocalOnline -> "DISCONNECTED"
+                    syncState.isLocalOnline -> "CONNECTED"
+                    else -> syncState.currentSyncStatus.name.replace("_", " ")
+                }
+
                 // Sync status chip
                 Box(
                     modifier = Modifier
@@ -251,13 +261,30 @@ private fun StatusHeaderCard(
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = syncState.currentSyncStatus.name.replace("_", " "),
+                        text = statusText,
                         color = syncBadgeColor,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = null,
+                    tint = EmeraldLight,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Cloudflare Room: friendgroup123 • R2 Storage Active",
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace
+                )
             }
 
             Spacer(modifier = Modifier.height(14.dp))

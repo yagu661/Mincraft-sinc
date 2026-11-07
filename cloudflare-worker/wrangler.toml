@@ -1,0 +1,19 @@
+name = "spring-paper-f60a"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Durable Object for real-time WebSocket rooms and editing lease coordination
+[durable_objects]
+bindings = [
+  { name = "SYNC_ROOM", class_name = "SyncRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SyncRoom"]
+
+# Cloudflare R2 Bucket for storing immutable Minecraft world snapshots
+[[r2_buckets]]
+binding = "WORLDS_BUCKET"
+bucket_name = "minecraft-worlds"
+preview_bucket_name = "minecraft-worlds-preview"

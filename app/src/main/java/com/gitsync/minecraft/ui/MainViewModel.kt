@@ -181,7 +181,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun pullNow() {
         viewModelScope.launch {
-            syncEngine.triggerPendingPushSync()
+            val worldId = _selectedWorldId.value ?: "SurvivalWorld"
+            syncEngine.pullLatest(worldId)
         }
     }
 

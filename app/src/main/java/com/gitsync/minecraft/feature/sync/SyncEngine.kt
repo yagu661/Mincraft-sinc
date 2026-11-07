@@ -1,6 +1,7 @@
 package com.gitsync.minecraft.feature.sync
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.gitsync.minecraft.core.database.AppDatabase
 import com.gitsync.minecraft.core.database.CommitEntity
@@ -9,12 +10,14 @@ import com.gitsync.minecraft.core.model.MinecraftStorageType
 import com.gitsync.minecraft.core.model.SyncState
 import com.gitsync.minecraft.core.model.SyncStatus
 import com.gitsync.minecraft.core.networking.ChunkProtocol
+import com.gitsync.minecraft.core.networking.CloudflareStorageClient
 import com.gitsync.minecraft.core.networking.FileTransferSession
 import com.gitsync.minecraft.core.networking.SignalingClient
 import com.gitsync.minecraft.core.networking.WebRtcDataChannelManager
 import com.gitsync.minecraft.core.security.KeystoreManager
 import com.gitsync.minecraft.core.storage.McWorldImporter
 import com.gitsync.minecraft.core.storage.MinecraftStorageDetector
+import com.gitsync.minecraft.core.storage.StorageAccessHelper
 import com.gitsync.minecraft.feature.backup.DivergenceDetector
 import com.gitsync.minecraft.feature.monitoring.MinecraftUsageStatsHelper
 import kotlinx.coroutines.CoroutineScope
@@ -55,8 +58,8 @@ class SyncEngine(
     fun start() {
         val identity = keystoreManager.getDeviceIdentity()
         val pairedId = keystoreManager.getPairedDeviceId()
-        val token = keystoreManager.getPairedToken() ?: identity.pairingSecret
         val serverUrl = keystoreManager.getSignalingServerUrl()
+        val roomId = keystoreManager.getRoomId()
 
         _syncState.update {
             it.copy(
@@ -65,7 +68,14 @@ class SyncEngine(
             )
         }
 
-        signalingClient.connect(serverUrl, identity.deviceId, token, pairedId)
+        signalingClient.connect(
+            serverUrl = serverUrl,
+            roomId = roomId,
+            deviceId = identity.deviceId,
+            displayName = identity.displayName,
+            role = if (Build.VERSION.SDK_INT <= 29) "OWNER_DEVICE_A" else "FRIEND_DEVICE_C",
+            androidVersion = Build.VERSION.SDK_INT
+        )
 
         scope.launch {
             signalingClient.isConnected.collect { online ->
@@ -74,10 +84,16 @@ class SyncEngine(
         }
 
         scope.launch {
-            signalingClient.isRemoteOnline.collect { remoteOnline ->
-                _syncState.update { it.copy(isRemoteOnline = remoteOnline) }
-                if (remoteOnline) {
-                    Log.i(TAG, "Remote partner came online! Delivering any queued updates (Rule C).")
+            signalingClient.connectedPeers.collect { peers ->
+                val hasPeers = peers.isNotEmpty()
+                _syncState.update {
+                    it.copy(
+                        isRemoteOnline = hasPeers,
+                        pairedDeviceName = peers.values.firstOrNull() ?: it.pairedDeviceName
+                    )
+                }
+                if (hasPeers) {
+                    Log.i(TAG, "Peers connected in Cloudflare room $roomId: ${peers.values.joinToString()}. Checking pending sync.")
                     triggerPendingPushSync()
                 }
             }
@@ -85,6 +101,12 @@ class SyncEngine(
     }
 
     private fun setupSignalingCallbacks() {
+        signalingClient.onSyncNotificationReceived = { worldId, commitId, sha256, downloadUrl, authorName ->
+            scope.launch {
+                handleRemoteSyncNotification(worldId, commitId, sha256, downloadUrl, authorName)
+            }
+        }
+
         signalingClient.onOfferReceived = { sdp, senderId ->
             Log.i(TAG, "Incoming WebRTC Offer from $senderId. Preparing answer.")
             val rtc = getOrCreateWebRtcManager()
@@ -99,10 +121,6 @@ class SyncEngine(
 
         signalingClient.onIceCandidateReceived = { sdpMid, sdpMLineIndex, candidate ->
             webRtcManager?.addRemoteIceCandidate(sdpMid, sdpMLineIndex, candidate)
-        }
-
-        signalingClient.onPendingUpdateAvailable = { commitId, worldId, senderId ->
-            Log.i(TAG, "Partner announced pending update commit=$commitId for world=$worldId")
         }
     }
 
@@ -170,17 +188,166 @@ class SyncEngine(
     }
 
     /**
-     * Executes Rule E, F, G, H, I on received snapshot.
+     * Handles an incoming synchronization notification broadcast through Cloudflare WebSocket.
+     * Downloads the snapshot from Cloudflare R2, verifies checksum, and installs safely.
      */
+    suspend fun handleRemoteSyncNotification(
+        worldId: String,
+        commitId: String,
+        sha256: String,
+        downloadUrl: String,
+        authorName: String
+    ) = withContext(Dispatchers.IO) {
+        Log.i(TAG, "Handling remote sync notice: world=$worldId, commit=$commitId from $authorName")
+
+        // 1. Check if we already have this commit
+        val existing = database.commitDao().getCommitById(commitId)
+        if (existing != null) {
+            Log.i(TAG, "Commit $commitId is already in local database. Skipping redundant download.")
+            return@withContext
+        }
+
+        // 2. Check if Minecraft is running on this device
+        if (MinecraftUsageStatsHelper.isMinecraftInForeground(context)) {
+            Log.w(TAG, "Minecraft is currently running! Staging snapshot for post-game import.")
+            _syncState.update {
+                it.copy(
+                    currentSyncStatus = SyncStatus.AWAITING_IMPORT,
+                    lastError = "Minecraft is currently running. Snapshot preserved for safe import."
+                )
+            }
+            NotificationHelper.showImportReadyNotification(context, worldId, "New update from $authorName")
+            return@withContext
+        }
+
+        _syncState.update {
+            it.copy(
+                currentSyncStatus = SyncStatus.RECEIVING,
+                activeTransferProgress = 0f
+            )
+        }
+
+        // 3. Download snapshot binary from Cloudflare R2
+        val tempDir = StorageAccessHelper.getTempDirectory(context)
+        val targetArchive = File(tempDir, "$commitId.mcworld")
+        val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+
+        val downloadResult = storageClient.downloadSnapshot(
+            worldId = worldId,
+            commitId = commitId,
+            expectedSha256 = sha256,
+            targetFile = targetArchive
+        ) { bytesRead, totalBytes ->
+            val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
+            _syncState.update {
+                it.copy(
+                    currentSyncStatus = SyncStatus.RECEIVING,
+                    activeTransferProgress = progress
+                )
+            }
+        }
+
+        if (downloadResult.isFailure) {
+            val err = downloadResult.exceptionOrNull()?.message ?: "Download failed"
+            Log.e(TAG, "Download from Cloudflare R2 failed: $err")
+            _syncState.update {
+                it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = err)
+            }
+            return@withContext
+        }
+
+        val downloadedArchive = downloadResult.getOrThrow()
+
+        // 4. Validate archive internal Bedrock structure
+        if (!importer.validateArchiveStructure(downloadedArchive)) {
+            Log.e(TAG, "Downloaded file does not contain valid Bedrock level.dat structure.")
+            _syncState.update {
+                it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = "Corrupt Bedrock archive structure")
+            }
+            return@withContext
+        }
+
+        val incomingCommit = Commit(
+            commitId = commitId,
+            worldId = worldId,
+            parentCommitId = null,
+            timestamp = System.currentTimeMillis(),
+            deviceId = "remote",
+            authorName = authorName,
+            commitMessage = "Synced from $authorName via Cloudflare R2",
+            fileSizeBytes = downloadedArchive.length(),
+            sha256Checksum = sha256,
+            snapshotFilePath = downloadedArchive.absolutePath,
+            syncStatus = SyncStatus.SYNCED
+        )
+
+        // 5. Evaluate Git-style divergence
+        val localHead = database.commitDao().getLatestCommit(worldId)?.toModel()
+        val allLocalCommits = database.commitDao().getCommitsForWorld(worldId).map { it.toModel() }
+        val relationship = DivergenceDetector.evaluate(localHead, incomingCommit, allLocalCommits)
+
+        if (relationship == DivergenceDetector.SyncRelationship.DIVERGENT_BRANCH) {
+            Log.w(TAG, "Divergent branch detected! Both devices independently modified world.")
+            database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.CONFLICT)))
+            _syncState.update {
+                it.copy(
+                    currentSyncStatus = SyncStatus.CONFLICT,
+                    hasUnresolvedConflict = true,
+                    conflictingCommitA = localHead,
+                    conflictingCommitB = incomingCommit
+                )
+            }
+            NotificationHelper.showConflictNotification(context, worldId)
+            return@withContext
+        }
+
+        // 6. Safe staged atomic replacement into Minecraft folder
+        val capability = detector.detectCapabilities()
+        val targetFolder = File(capability.resolvedPath, worldId)
+
+        if (capability.isWriteAvailable) {
+            val replaceResult = importer.atomicStagedReplacement(downloadedArchive, targetFolder)
+            if (replaceResult.isSuccess) {
+                database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit))
+                _syncState.update {
+                    it.copy(
+                        currentSyncStatus = SyncStatus.SYNCED,
+                        latestLocalCommit = incomingCommit
+                    )
+                }
+                NotificationHelper.showSyncCompletedNotification(context, worldId)
+                Log.i(TAG, "World '$worldId' automatically replaced and updated from Cloudflare R2!")
+            } else {
+                database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.AWAITING_IMPORT)))
+                _syncState.update {
+                    it.copy(
+                        currentSyncStatus = SyncStatus.AWAITING_IMPORT,
+                        lastError = "Replacement failed: ${replaceResult.exceptionOrNull()?.message}. Snapshot saved for manual import."
+                    )
+                }
+                NotificationHelper.showImportReadyNotification(context, worldId, "Ready to import")
+            }
+        } else {
+            // Android 15 SAF fallback
+            database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.AWAITING_IMPORT)))
+            _syncState.update {
+                it.copy(
+                    currentSyncStatus = SyncStatus.AWAITING_IMPORT,
+                    lastError = "Android 15 storage restrictions: World staged for one-tap import into Minecraft."
+                )
+            }
+            NotificationHelper.showImportReadyNotification(context, worldId, "Ready to import")
+        }
+    }
+
     private suspend fun processReceivedSnapshot(
         archiveFile: File,
         metadata: ChunkProtocol.TransferMetadata
     ) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Processing verified incoming snapshot: ${archiveFile.name}")
+        Log.i(TAG, "Processing verified incoming P2P snapshot: ${archiveFile.name}")
 
-        // 1. Rule F: Never synchronize while the destination Minecraft world is actively being used.
         if (MinecraftUsageStatsHelper.isMinecraftInForeground(context)) {
-            Log.w(TAG, "Minecraft is currently active! Staging snapshot for post-game import (Rule F).")
+            Log.w(TAG, "Minecraft is currently active! Staging snapshot for post-game import.")
             _syncState.update {
                 it.copy(
                     currentSyncStatus = SyncStatus.AWAITING_IMPORT,
@@ -191,14 +358,11 @@ class SyncEngine(
             return@withContext
         }
 
-        // 2. Validate archive structure
         if (!importer.validateArchiveStructure(archiveFile)) {
-            Log.e(TAG, "Received archive does not contain valid Minecraft Bedrock level.dat structure.")
             _syncState.update { it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = "Invalid Bedrock world archive") }
             return@withContext
         }
 
-        // 3. Check Git-style divergence & history (Rule G & Rule H)
         val localHead = database.commitDao().getLatestCommit(metadata.worldId)?.toModel()
         val allLocalCommits = database.commitDao().getCommitsForWorld(metadata.worldId).map { it.toModel() }
 
@@ -217,23 +381,16 @@ class SyncEngine(
         )
 
         val relationship = DivergenceDetector.evaluate(localHead, incomingCommit, allLocalCommits)
-        Log.i(TAG, "Divergence analysis result: $relationship")
-
         when (relationship) {
             DivergenceDetector.SyncRelationship.UP_TO_DATE -> {
-                Log.i(TAG, "Local world is already up to date with this commit.")
                 _syncState.update { it.copy(currentSyncStatus = SyncStatus.SYNCED) }
-                sendStorageAck(metadata.commitId, true)
                 return@withContext
             }
             DivergenceDetector.SyncRelationship.OUTDATED_REMOTE -> {
-                Log.w(TAG, "Remote sent an older commit than current local head. Rejecting overwrite (Rule E).")
                 _syncState.update { it.copy(lastError = "Remote sent older commit than local head.") }
-                sendStorageAck(metadata.commitId, false)
                 return@withContext
             }
             DivergenceDetector.SyncRelationship.DIVERGENT_BRANCH -> {
-                Log.w(TAG, "Divergent branch detected! Both players modified the world concurrently (Rule G & H).")
                 database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.CONFLICT)))
                 _syncState.update {
                     it.copy(
@@ -244,20 +401,18 @@ class SyncEngine(
                     )
                 }
                 NotificationHelper.showConflictNotification(context, metadata.worldId)
-                sendStorageAck(metadata.commitId, true)
                 return@withContext
             }
             DivergenceDetector.SyncRelationship.FAST_FORWARD -> {
-                // Sequential progression - proceed with installation
+                // proceed
             }
         }
 
-        // 4. Perform atomic staged replacement if permitted (Rule I)
         val capability = detector.detectCapabilities()
-        if (capability.storageType == MinecraftStorageType.LEGACY_GAMES_FOLDER && capability.isWriteAvailable) {
-            val targetFolder = File(MinecraftStorageDetector.LEGACY_WORLDS_DIR, metadata.worldId)
-            val replaceResult = importer.atomicStagedReplacement(archiveFile, targetFolder)
+        val targetFolder = File(capability.resolvedPath, metadata.worldId)
 
+        if (capability.isWriteAvailable) {
+            val replaceResult = importer.atomicStagedReplacement(archiveFile, targetFolder)
             if (replaceResult.isSuccess) {
                 database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit))
                 _syncState.update {
@@ -266,55 +421,32 @@ class SyncEngine(
                         latestLocalCommit = incomingCommit
                     )
                 }
-                sendStorageAck(metadata.commitId, true)
-                Log.i(TAG, "World '${metadata.worldId}' automatically updated and synced!")
             } else {
                 database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.AWAITING_IMPORT)))
                 _syncState.update {
                     it.copy(
                         currentSyncStatus = SyncStatus.AWAITING_IMPORT,
-                        lastError = "Replacement failed: ${replaceResult.exceptionOrNull()?.message}. Snapshot saved for manual import."
+                        lastError = "Replacement failed: ${replaceResult.exceptionOrNull()?.message}"
                     )
                 }
                 NotificationHelper.showImportReadyNotification(context, metadata.worldId, metadata.commitMessage)
-                sendStorageAck(metadata.commitId, true)
             }
         } else {
-            // Android 11+ SAF or restricted sandbox
             database.commitDao().insertCommit(CommitEntity.fromModel(incomingCommit.copy(syncStatus = SyncStatus.AWAITING_IMPORT)))
             _syncState.update {
-                it.copy(
-                    currentSyncStatus = SyncStatus.AWAITING_IMPORT,
-                    lastError = "Android Scoped Storage requires one-tap .mcworld import."
-                )
+                it.copy(currentSyncStatus = SyncStatus.AWAITING_IMPORT)
             }
             NotificationHelper.showImportReadyNotification(context, metadata.worldId, metadata.commitMessage)
-            sendStorageAck(metadata.commitId, true)
         }
     }
 
-    private fun sendStorageAck(commitId: String, success: Boolean) {
-        val ack = ChunkProtocol.packStorageAck(commitId, success)
-        webRtcManager?.sendBinaryPacket(ack)
-    }
-
     /**
-     * Rule A & Rule C: Pushes queued commit to remote partner.
+     * Uploads the local snapshot to Cloudflare R2 and broadcasts the sync notice to the room.
      */
     suspend fun pushCommit(commit: Commit): Result<Unit> = withContext(Dispatchers.IO) {
         val file = File(commit.snapshotFilePath)
         if (!file.exists()) {
             return@withContext Result.failure(IllegalArgumentException("Snapshot file missing: ${commit.snapshotFilePath}"))
-        }
-
-        val pairedId = keystoreManager.getPairedDeviceId()
-            ?: return@withContext Result.failure(IllegalStateException("No paired buddy configured."))
-
-        if (!_syncState.value.isRemoteOnline) {
-            Log.i(TAG, "Remote partner is offline. Queuing update for later delivery (Rule B).")
-            signalingClient.notifyPendingUpdate(pairedId, commit.commitId, commit.worldId)
-            _syncState.update { it.copy(currentSyncStatus = SyncStatus.PENDING_PUSH) }
-            return@withContext Result.success(Unit)
         }
 
         _syncState.update {
@@ -324,69 +456,68 @@ class SyncEngine(
             )
         }
 
-        val rtc = getOrCreateWebRtcManager()
-        rtc.createPeerConnection()
-        rtc.createDataChannelAsSender()
-        rtc.createOffer()
-
-        // Wait up to 10 seconds for DataChannel open
-        var waited = 0
-        while (!rtc.isDataChannelOpen.value && waited < 100) {
-            kotlinx.coroutines.delay(100)
-            waited++
-        }
-
-        if (!rtc.isDataChannelOpen.value) {
-            _syncState.update { it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = "Could not establish WebRTC DataChannel connection.") }
-            return@withContext Result.failure(IllegalStateException("DataChannel timeout"))
-        }
-
-        val totalChunks = ((file.length() + ChunkProtocol.CHUNK_PAYLOAD_SIZE - 1) / ChunkProtocol.CHUNK_PAYLOAD_SIZE).toInt()
-        val identity = keystoreManager.getDeviceIdentity()
-
-        val metadata = ChunkProtocol.TransferMetadata(
-            transferId = UUID.randomUUID().toString(),
-            commitId = commit.commitId,
+        val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+        val uploadResult = storageClient.uploadSnapshot(
             worldId = commit.worldId,
-            parentCommitId = commit.parentCommitId,
-            totalSizeBytes = file.length(),
-            totalChunks = totalChunks,
-            sha256Checksum = commit.sha256Checksum,
-            commitMessage = commit.commitMessage,
-            senderDeviceId = identity.deviceId,
-            senderDisplayName = identity.displayName,
-            timestamp = commit.timestamp
-        )
-
-        val streamResult = rtc.streamFileWithBackpressure(file, metadata) { sent, total ->
-            val progress = sent.toFloat() / total.toFloat()
-            _syncState.update {
-                it.copy(
-                    activeTransferProgress = progress
-                )
-            }
+            commit = commit,
+            snapshotFile = file
+        ) { sent, total ->
+            val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
+            _syncState.update { it.copy(activeTransferProgress = progress) }
         }
 
-        if (streamResult.isSuccess) {
+        if (uploadResult.isSuccess) {
+            val downloadUrl = uploadResult.getOrThrow()
             database.commitDao().updateSyncStatus(commit.commitId, SyncStatus.SYNCED.name)
             database.syncQueueDao().markComplete(commit.commitId)
+
             _syncState.update {
                 it.copy(
                     currentSyncStatus = SyncStatus.SYNCED,
                     latestLocalCommit = commit
                 )
             }
-            Log.i(TAG, "Push completed successfully for commit ${commit.commitId}")
+
+            // Broadcast sync announcement to Cloudflare room friendgroup123
+            signalingClient.broadcastSyncNotification(
+                worldId = commit.worldId,
+                commitId = commit.commitId,
+                sha256 = commit.sha256Checksum,
+                downloadUrl = downloadUrl,
+                authorName = commit.authorName
+            )
+
+            Log.i(TAG, "Push to Cloudflare R2 completed & broadcast to room: ${commit.commitId}")
+            Result.success(Unit)
         } else {
+            val err = uploadResult.exceptionOrNull()?.message ?: "Upload failed"
+            Log.e(TAG, "Upload to Cloudflare R2 failed: $err")
             _syncState.update {
                 it.copy(
                     currentSyncStatus = SyncStatus.FAILED,
-                    lastError = streamResult.exceptionOrNull()?.message
+                    lastError = err
                 )
             }
+            Result.failure(uploadResult.exceptionOrNull() ?: Exception(err))
         }
+    }
 
-        streamResult
+    /**
+     * Manual PULL or device-switching check: fetches latest remote snapshot from Cloudflare R2.
+     */
+    suspend fun pullLatest(worldId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+        val latestMetaResult = storageClient.getLatestRemoteSnapshot(worldId)
+        val json = latestMetaResult.getOrNull()
+            ?: return@withContext Result.failure(Exception("No remote snapshots found in Cloudflare R2 for world $worldId"))
+
+        val commitId = json.optString("commitId")
+        val sha256 = json.optString("sha256Checksum")
+        val authorName = json.optString("authorName", "Remote Player")
+        val downloadUrl = json.optString("downloadUrl", "")
+
+        handleRemoteSyncNotification(worldId, commitId, sha256, downloadUrl, authorName)
+        Result.success(Unit)
     }
 
     suspend fun triggerPendingPushSync() {

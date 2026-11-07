@@ -22,7 +22,11 @@ class KeystoreManager(private val context: Context) {
         private const val KEY_PAIRED_DEVICE_NAME = "paired_device_name"
         private const val KEY_PAIRED_TOKEN = "paired_token"
         private const val KEY_SIGNALING_URL = "signaling_url"
-        private const val DEFAULT_SIGNALING_URL = "wss://gitsync-signaling.internal.net:8443"
+        private const val DEFAULT_SIGNALING_URL = "wss://spring-paper-f60a.xmenlittlegamer.workers.dev/ws"
+        private const val KEY_ROOM_ID = "room_id"
+        private const val DEFAULT_ROOM_ID = "friendgroup123"
+        private const val KEY_STORAGE_URL = "storage_url"
+        private const val DEFAULT_STORAGE_URL = "https://spring-paper-f60a.xmenlittlegamer.workers.dev"
     }
 
     private val securePrefs: SharedPreferences by lazy {
@@ -101,5 +105,19 @@ class KeystoreManager(private val context: Context) {
 
     fun setSignalingServerUrl(url: String) {
         securePrefs.edit().putString(KEY_SIGNALING_URL, url.trim()).apply()
+    }
+
+    fun getRoomId(): String =
+        securePrefs.getString(KEY_ROOM_ID, DEFAULT_ROOM_ID) ?: DEFAULT_ROOM_ID
+
+    fun setRoomId(roomId: String) {
+        securePrefs.edit().putString(KEY_ROOM_ID, roomId.trim()).apply()
+    }
+
+    fun getStorageUrl(): String =
+        securePrefs.getString(KEY_STORAGE_URL, DEFAULT_STORAGE_URL) ?: DEFAULT_STORAGE_URL
+
+    fun setStorageUrl(url: String) {
+        securePrefs.edit().putString(KEY_STORAGE_URL, url.trim()).apply()
     }
 }
