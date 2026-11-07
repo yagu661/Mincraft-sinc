@@ -303,7 +303,12 @@ class SyncEngine(
 
         // 6. Safe staged atomic replacement into Minecraft folder
         val capability = detector.detectCapabilities()
-        val targetFolder = File(capability.resolvedPath, worldId)
+        val worldsDir = if (MinecraftStorageDetector.LEGACY_WORLDS_DIR.exists() && MinecraftStorageDetector.LEGACY_WORLDS_DIR.canWrite()) {
+            MinecraftStorageDetector.LEGACY_WORLDS_DIR
+        } else {
+            MinecraftStorageDetector.SCOPED_WORLDS_DIR
+        }
+        val targetFolder = File(worldsDir, worldId)
 
         if (capability.isWriteAvailable) {
             val replaceResult = importer.atomicStagedReplacement(downloadedArchive, targetFolder)
@@ -409,7 +414,12 @@ class SyncEngine(
         }
 
         val capability = detector.detectCapabilities()
-        val targetFolder = File(capability.resolvedPath, metadata.worldId)
+        val worldsDir = if (MinecraftStorageDetector.LEGACY_WORLDS_DIR.exists() && MinecraftStorageDetector.LEGACY_WORLDS_DIR.canWrite()) {
+            MinecraftStorageDetector.LEGACY_WORLDS_DIR
+        } else {
+            MinecraftStorageDetector.SCOPED_WORLDS_DIR
+        }
+        val targetFolder = File(worldsDir, metadata.worldId)
 
         if (capability.isWriteAvailable) {
             val replaceResult = importer.atomicStagedReplacement(archiveFile, targetFolder)

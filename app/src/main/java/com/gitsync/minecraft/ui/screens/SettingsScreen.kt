@@ -183,7 +183,6 @@ fun SettingsScreen(
                                 app.keystoreManager.setSignalingServerUrl(signalingUrl)
                                 app.keystoreManager.setRoomId(roomId)
                                 app.keystoreManager.setStorageUrl(storageUrl)
-                                app.syncEngine.start()
                                 saveStatus = "Cloudflare settings saved! Reconnecting room..."
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
