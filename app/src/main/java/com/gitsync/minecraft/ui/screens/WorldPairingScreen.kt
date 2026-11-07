@@ -320,18 +320,18 @@ fun WorldPairingScreen(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, DiamondBlue.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                                .border(1.dp, LapisAccent.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
                             colors = CardDefaults.cardColors(containerColor = GraphiteCardElevated),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Link, contentDescription = null, tint = DiamondBlue)
+                                    Icon(Icons.Default.Link, contentDescription = null, tint = LapisAccent)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = "CHOICE A: LINK EXISTING LOCAL WORLD",
                                         fontWeight = FontWeight.Bold,
-                                        color = DiamondBlue,
+                                        color = LapisAccent,
                                         fontSize = 13.sp
                                     )
                                 }
@@ -364,7 +364,7 @@ fun WorldPairingScreen(
                                 Button(
                                     onClick = { showLinkConfirmationDialog = true },
                                     enabled = selectedExistingWorldToLink != null,
-                                    colors = ButtonDefaults.buttonColors(containerColor = DiamondBlue, contentColor = GraphiteBackground),
+                                    colors = ButtonDefaults.buttonColors(containerColor = LapisAccent, contentColor = TextPrimary),
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {

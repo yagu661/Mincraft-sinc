@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.gitsync.minecraft.GitSyncApplication
 import com.gitsync.minecraft.core.database.CommitEntity
+import com.gitsync.minecraft.core.database.SharedWorldEntity
 import com.gitsync.minecraft.core.model.*
 import com.gitsync.minecraft.core.storage.*
 import com.gitsync.minecraft.feature.backup.BackupEngine
