@@ -36,10 +36,25 @@ fun StorageSetupScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    var showFileManagerChooser by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     val treeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
+        if (uri != null) {
+            StorageAccessHelper.persistUriPermission(
+                context,
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            onSaveSafUri(uri)
+        }
+    }
+
+    val customAppLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
         if (uri != null) {
             StorageAccessHelper.persistUriPermission(
                 context,
@@ -152,14 +167,14 @@ fun StorageSetupScreen(
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Button(
-                            onClick = { treeLauncher.launch(null) },
+                            onClick = { showFileManagerChooser = true },
                             colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("AUTHORIZE MINECRAFT FOLDER (SAF)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("SELECT FOLDER (CHOOSE ZARCHIVER / FILES APP)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
                     }
                 }
@@ -251,6 +266,25 @@ fun StorageSetupScreen(
                 }
             }
         }
+    }
+
+    if (showFileManagerChooser) {
+        com.gitsync.minecraft.ui.components.FileManagerChooserDialog(
+            onDismissRequest = { showFileManagerChooser = false },
+            onAppSelected = { chosenApp ->
+                showFileManagerChooser = false
+                try {
+                    if (chosenApp.packageName == "android.system.default") {
+                        treeLauncher.launch(null)
+                    } else {
+                        customAppLauncher.launch(chosenApp.intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("StorageSetupScreen", "Direct package launch failed, falling back to tree picker", e)
+                    treeLauncher.launch(null)
+                }
+            }
+        )
     }
 }
 

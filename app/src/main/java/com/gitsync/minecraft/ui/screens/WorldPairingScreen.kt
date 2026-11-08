@@ -920,7 +920,7 @@ private fun StoragePermissionNoticeCard(
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("AUTHORIZE MINECRAFT WORLDS FOLDER (SAF)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("SELECT FOLDER (CHOOSE ZARCHIVER / FILES APP)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

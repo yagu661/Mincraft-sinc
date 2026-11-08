@@ -60,9 +60,25 @@ fun OnboardingScreen(
     var inputGoogleToken by remember { mutableStateOf(app.keystoreManager.getGoogleAccessToken() ?: "") }
     var inputFriendEmail by remember { mutableStateOf(app.keystoreManager.getFriendGoogleEmail() ?: "") }
 
+    var showFileManagerChooser by remember { mutableStateOf(false) }
+
     val treeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
+        if (uri != null) {
+            StorageAccessHelper.persistUriPermission(
+                context,
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            onSaveSafUri(uri)
+        }
+    }
+
+    val customAppLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
         if (uri != null) {
             StorageAccessHelper.persistUriPermission(
                 context,
@@ -154,14 +170,14 @@ fun OnboardingScreen(
 
                             if (!storageCapability.isWorldDirectoryAccessible) {
                                 Button(
-                                    onClick = { treeLauncher.launch(null) },
+                                    onClick = { showFileManagerChooser = true },
                                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("AUTHORIZE MINECRAFT FOLDER (SAF)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("SELECT FOLDER (CHOOSE ZARCHIVER / FILES APP)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
                             } else {
                                 Row(
@@ -369,6 +385,25 @@ fun OnboardingScreen(
                 }
             }
         }
+    }
+
+    if (showFileManagerChooser) {
+        com.gitsync.minecraft.ui.components.FileManagerChooserDialog(
+            onDismissRequest = { showFileManagerChooser = false },
+            onAppSelected = { chosenApp ->
+                showFileManagerChooser = false
+                try {
+                    if (chosenApp.packageName == "android.system.default") {
+                        treeLauncher.launch(null)
+                    } else {
+                        customAppLauncher.launch(chosenApp.intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("OnboardingScreen", "Direct package launch failed, falling back to tree picker", e)
+                    treeLauncher.launch(null)
+                }
+            }
+        )
     }
 }
 

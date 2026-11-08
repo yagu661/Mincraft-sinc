@@ -25,6 +25,27 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- Queries to detect installed file managers such as ZArchiver, Solid Explorer, Total Commander, MiXplorer, Files by Google, and Document Providers -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT_TREE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <package android:name="ru.zdevs.zarchiver" />
+        <package android:name="ru.zdevs.zarchiver.pro" />
+        <package android:name="com.google.android.documentsui" />
+        <package android:name="com.google.android.apps.nbu.files" />
+        <package android:name="com.sec.android.app.myfiles" />
+        <package android:name="pl.solidexplorer2" />
+        <package android:name="com.ghisler.android.TotalCommander" />
+        <package android:name="com.mixplorer" />
+        <package android:name="com.speedsoftware.rootexplorer" />
+        <package android:name="com.alphainventor.filemanager" />
+    </queries>
+
     <application
         android:name=".GitSyncApplication"
         android:allowBackup="true"
