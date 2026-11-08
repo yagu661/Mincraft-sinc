@@ -149,6 +149,15 @@ fun DashboardScreen(
 
         item {
             DashboardNavCard(
+                icon = Icons.Default.VerifiedUser,
+                title = "Guided First-Launch Setup Wizard",
+                subtitle = "Storage permissions • Usage access • Google Drive account & friend sharing setup",
+                onClick = { onNavigate(AppScreen.ONBOARDING) }
+            )
+        }
+
+        item {
+            DashboardNavCard(
                 icon = Icons.Default.Public,
                 title = "World Pairing & Shared Co-op Modes",
                 subtitle = "Select host world • Link local copy or download • 3 Modes (Online Co-op, Host Offline, Friend Offline)",

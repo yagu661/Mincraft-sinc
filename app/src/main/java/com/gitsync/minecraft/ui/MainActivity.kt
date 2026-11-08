@@ -54,6 +54,16 @@ fun AppNavigation(viewModel: MainViewModel) {
     val activeSharedWorld by viewModel.activeSharedWorld.collectAsState()
 
     when (currentScreen) {
+        AppScreen.ONBOARDING -> {
+            OnboardingScreen(
+                storageCapability = storageCapability,
+                hasUsagePermission = hasUsagePermission,
+                onSaveSafUri = { viewModel.saveAuthorizedSafUri(it) },
+                onConnectGoogle = { email, token -> viewModel.setGoogleAccount(email, token) },
+                onSetFriendEmail = { viewModel.setFriendGoogleEmail(it) },
+                onFinishOnboarding = { viewModel.completeOnboarding() }
+            )
+        }
         AppScreen.DASHBOARD -> {
             DashboardScreen(
                 syncState = syncState,

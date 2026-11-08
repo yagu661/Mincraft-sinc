@@ -227,36 +227,76 @@ class SyncEngine(
             )
         }
 
-        // 3. Download snapshot binary from Cloudflare R2
+        // 3. Download snapshot binary from Google Drive (or Cloudflare fallback)
         val tempDir = StorageAccessHelper.getTempDirectory(context)
         val targetArchive = File(tempDir, "$commitId.mcworld")
-        val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+        var downloadSuccess = false
+        var downloadErrorMsg: String? = null
 
-        val downloadResult = storageClient.downloadSnapshot(
-            worldId = worldId,
-            commitId = commitId,
-            expectedSha256 = sha256,
-            targetFile = targetArchive
-        ) { bytesRead, totalBytes ->
-            val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
-            _syncState.update {
-                it.copy(
-                    currentSyncStatus = SyncStatus.RECEIVING,
-                    activeTransferProgress = progress
-                )
+        val driveFolderId = keystoreManager.getDriveSharedFolderId()
+        val googleToken = keystoreManager.getGoogleAccessToken()
+
+        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
+            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
+            // If downloadUrl is a drive file ID or if we lookup by commitId
+            var driveFileId = if (downloadUrl.startsWith("drive:")) downloadUrl.removePrefix("drive:") else ""
+            if (driveFileId.isBlank()) {
+                val listRes = driveClient.listWorldSnapshots(driveFolderId, worldId)
+                if (listRes.isSuccess) {
+                    val match = listRes.getOrNull()?.find { it.name.contains(commitId) || it.customProperties["commitId"] == commitId }
+                    if (match != null) driveFileId = match.fileId
+                }
+            }
+
+            if (driveFileId.isNotBlank()) {
+                Log.i(TAG, "Downloading world snapshot from shared Google Drive file $driveFileId")
+                val driveDownload = driveClient.downloadSnapshotArchive(
+                    driveFileId = driveFileId,
+                    targetFile = targetArchive,
+                    expectedSha256 = sha256
+                ) { bytesRead, totalBytes ->
+                    val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
+                    _syncState.update {
+                        it.copy(currentSyncStatus = SyncStatus.RECEIVING, activeTransferProgress = progress)
+                    }
+                }
+                if (driveDownload.isSuccess) {
+                    downloadSuccess = true
+                } else {
+                    downloadErrorMsg = driveDownload.exceptionOrNull()?.message
+                    Log.w(TAG, "Drive download failed: $downloadErrorMsg, checking fallback")
+                }
             }
         }
 
-        if (downloadResult.isFailure) {
-            val err = downloadResult.exceptionOrNull()?.message ?: "Download failed"
-            Log.e(TAG, "Download from Cloudflare R2 failed: $err")
-            _syncState.update {
-                it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = err)
+        if (!downloadSuccess) {
+            val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+            val downloadResult = storageClient.downloadSnapshot(
+                worldId = worldId,
+                commitId = commitId,
+                expectedSha256 = sha256,
+                targetFile = targetArchive
+            ) { bytesRead, totalBytes ->
+                val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
+                _syncState.update {
+                    it.copy(
+                        currentSyncStatus = SyncStatus.RECEIVING,
+                        activeTransferProgress = progress
+                    )
+                }
             }
-            return@withContext
+
+            if (downloadResult.isFailure) {
+                val err = downloadResult.exceptionOrNull()?.message ?: downloadErrorMsg ?: "Download failed"
+                Log.e(TAG, "Download failed: $err")
+                _syncState.update {
+                    it.copy(currentSyncStatus = SyncStatus.FAILED, lastError = err)
+                }
+                return@withContext
+            }
         }
 
-        val downloadedArchive = downloadResult.getOrThrow()
+        val downloadedArchive = targetArchive
 
         // 4. Validate archive internal Bedrock structure
         if (!importer.validateArchiveStructure(downloadedArchive)) {
@@ -451,7 +491,7 @@ class SyncEngine(
     }
 
     /**
-     * Uploads the local snapshot to Cloudflare R2 and broadcasts the sync notice to the room.
+     * Uploads the local snapshot to Google Drive (with Cloudflare fallback) and broadcasts the sync notice to the room.
      */
     suspend fun pushCommit(commit: Commit): Result<Unit> = withContext(Dispatchers.IO) {
         val file = File(commit.snapshotFilePath)
@@ -466,18 +506,65 @@ class SyncEngine(
             )
         }
 
-        val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
-        val uploadResult = storageClient.uploadSnapshot(
-            worldId = commit.worldId,
-            commit = commit,
-            snapshotFile = file
-        ) { sent, total ->
-            val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
-            _syncState.update { it.copy(activeTransferProgress = progress) }
+        val driveFolderId = keystoreManager.getDriveSharedFolderId()
+        val googleToken = keystoreManager.getGoogleAccessToken()
+        var uploadSuccess = false
+        var publishedUrl = ""
+        var uploadError: Throwable? = null
+
+        // 1. Primary: Google Drive Shared Folder Upload
+        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
+            Log.i(TAG, "Uploading world snapshot to Google Drive folder $driveFolderId")
+            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
+            val driveUpload = driveClient.uploadSnapshotArchive(
+                folderId = driveFolderId,
+                worldId = commit.worldId,
+                commitId = commit.commitId,
+                archiveFile = file,
+                expectedSha256 = commit.sha256Checksum,
+                authorName = commit.authorName,
+                deviceId = commit.deviceId,
+                commitMessage = commit.commitMessage
+            ) { sent, total ->
+                val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
+                _syncState.update { it.copy(activeTransferProgress = progress) }
+            }
+
+            if (driveUpload.isSuccess) {
+                val fileId = driveUpload.getOrThrow()
+                publishedUrl = "drive:$fileId"
+                uploadSuccess = true
+                Log.i(TAG, "Snapshot uploaded to Google Drive with file ID $fileId. Enforcing retention.")
+                // Enforce retention (keeps latest 5 backups per device, never deletes conflict backups)
+                driveClient.enforceRetention(driveFolderId, commit.worldId, keystoreManager.getBackupRetentionCount())
+            } else {
+                uploadError = driveUpload.exceptionOrNull()
+                Log.w(TAG, "Google Drive upload failed: ${uploadError?.message}. Attempting fallback.")
+            }
         }
 
-        if (uploadResult.isSuccess) {
-            val downloadUrl = uploadResult.getOrThrow()
+        // 2. Fallback / Parallel Storage: Cloudflare
+        if (!uploadSuccess) {
+            val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
+            val uploadResult = storageClient.uploadSnapshot(
+                worldId = commit.worldId,
+                commit = commit,
+                snapshotFile = file
+            ) { sent, total ->
+                val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
+                _syncState.update { it.copy(activeTransferProgress = progress) }
+            }
+
+            if (uploadResult.isSuccess) {
+                publishedUrl = uploadResult.getOrThrow()
+                uploadSuccess = true
+            } else {
+                uploadError = uploadResult.exceptionOrNull()
+            }
+        }
+
+        if (uploadSuccess) {
+            val downloadUrl = publishedUrl
             database.commitDao().updateSyncStatus(commit.commitId, SyncStatus.SYNCED.name)
             database.syncQueueDao().markComplete(commit.commitId)
 
@@ -513,13 +600,36 @@ class SyncEngine(
     }
 
     /**
-     * Manual PULL or device-switching check: fetches latest remote snapshot from Cloudflare R2.
+     * Manual PULL or device-switching check: fetches latest remote snapshot from Google Drive (or Cloudflare fallback).
      */
     suspend fun pullLatest(worldId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val driveFolderId = keystoreManager.getDriveSharedFolderId()
+        val googleToken = keystoreManager.getGoogleAccessToken()
+
+        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
+            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
+            val listRes = driveClient.listWorldSnapshots(driveFolderId, worldId)
+            if (listRes.isSuccess) {
+                val latestDriveFile = listRes.getOrNull()?.firstOrNull()
+                if (latestDriveFile != null) {
+                    val commitId = latestDriveFile.customProperties["commitId"]
+                        ?: latestDriveFile.name.substringAfter("--").substringBefore(".mcworld")
+                    val sha256 = latestDriveFile.customProperties["sha256"] ?: ""
+                    val authorName = latestDriveFile.customProperties["authorName"] ?: "Friend (Drive)"
+                    val downloadUrl = "drive:${latestDriveFile.fileId}"
+
+                    Log.i(TAG, "Pulling newest snapshot from Google Drive: commit=$commitId, file=${latestDriveFile.fileId}")
+                    handleRemoteSyncNotification(worldId, commitId, sha256, downloadUrl, authorName)
+                    return@withContext Result.success(Unit)
+                }
+            }
+        }
+
+        // Fallback: Query Cloudflare Worker
         val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
         val latestMetaResult = storageClient.getLatestRemoteSnapshot(worldId)
         val json = latestMetaResult.getOrNull()
-            ?: return@withContext Result.failure(Exception("No remote snapshots found in Cloudflare R2 for world $worldId"))
+            ?: return@withContext Result.failure(Exception("No remote snapshots found in Google Drive or Cloudflare for world $worldId"))
 
         val commitId = json.optString("commitId")
         val sha256 = json.optString("sha256Checksum")

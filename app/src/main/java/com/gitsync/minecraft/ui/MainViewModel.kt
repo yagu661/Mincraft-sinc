@@ -27,6 +27,7 @@ import java.io.File
 
 enum class AppScreen {
     DASHBOARD,
+    ONBOARDING,
     STORAGE_SETUP,
     STORAGE_DIAGNOSTIC,
     SYNC_GROUP,
@@ -95,6 +96,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scanWorlds()
         loadActiveSharedWorld()
         verifyDeviceReadiness()
+
+        // First launch onboarding check
+        if (!app.keystoreManager.isOnboardingCompleted()) {
+            _currentScreen.value = AppScreen.ONBOARDING
+        }
     }
 
     private fun loadActiveSharedWorld() {
@@ -312,6 +318,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun unpair() {
         app.keystoreManager.clearPairing()
         syncEngine.start()
+    }
+
+    fun setGoogleAccount(email: String, accessToken: String) {
+        app.keystoreManager.setGoogleAccount(email, accessToken)
+        viewModelScope.launch {
+            val driveClient = GoogleDriveClient(app) { accessToken }
+            val folderRes = driveClient.getOrCreateSyncFolder()
+            if (folderRes.isSuccess) {
+                val folderId = folderRes.getOrThrow()
+                app.keystoreManager.setDriveSharedFolder(folderId)
+                val friendEmail = app.keystoreManager.getFriendGoogleEmail()
+                if (!friendEmail.isNullOrBlank()) {
+                    driveClient.shareFolderWithFriend(folderId, friendEmail)
+                }
+            }
+        }
+    }
+
+    fun setFriendGoogleEmail(friendEmail: String) {
+        app.keystoreManager.setFriendGoogleEmail(friendEmail)
+        val folderId = app.keystoreManager.getDriveSharedFolderId()
+        val token = app.keystoreManager.getGoogleAccessToken()
+        if (!folderId.isNullOrBlank() && !token.isNullOrBlank() && friendEmail.isNotBlank()) {
+            viewModelScope.launch {
+                val driveClient = GoogleDriveClient(app) { token }
+                driveClient.shareFolderWithFriend(folderId, friendEmail)
+            }
+        }
+    }
+
+    fun completeOnboarding() {
+        app.keystoreManager.setOnboardingCompleted(true)
+        _currentScreen.value = AppScreen.DASHBOARD
     }
 
     // Manual Recovery Controls (Section 10 & Section H)
