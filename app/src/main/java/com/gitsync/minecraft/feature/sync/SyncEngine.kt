@@ -12,6 +12,7 @@ import com.gitsync.minecraft.core.model.SyncStatus
 import com.gitsync.minecraft.core.networking.ChunkProtocol
 import com.gitsync.minecraft.core.networking.CloudflareStorageClient
 import com.gitsync.minecraft.core.networking.FileTransferSession
+import com.gitsync.minecraft.core.networking.GoogleDriveClient
 import com.gitsync.minecraft.core.networking.SignalingClient
 import com.gitsync.minecraft.core.networking.WebRtcDataChannelManager
 import com.gitsync.minecraft.core.security.KeystoreManager
@@ -253,13 +254,14 @@ class SyncEngine(
                 val driveDownload = driveClient.downloadSnapshotArchive(
                     driveFileId = driveFileId,
                     targetFile = targetArchive,
-                    expectedSha256 = sha256
-                ) { bytesRead, totalBytes ->
-                    val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
-                    _syncState.update {
-                        it.copy(currentSyncStatus = SyncStatus.RECEIVING, activeTransferProgress = progress)
+                    expectedSha256 = sha256,
+                    onProgress = { bytesRead: Long, totalBytes: Long ->
+                        val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
+                        _syncState.update {
+                            it.copy(currentSyncStatus = SyncStatus.RECEIVING, activeTransferProgress = progress)
+                        }
                     }
-                }
+                )
                 if (driveDownload.isSuccess) {
                     downloadSuccess = true
                 } else {
@@ -524,11 +526,12 @@ class SyncEngine(
                 expectedSha256 = commit.sha256Checksum,
                 authorName = commit.authorName,
                 deviceId = commit.deviceId,
-                commitMessage = commit.commitMessage
-            ) { sent, total ->
-                val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
-                _syncState.update { it.copy(activeTransferProgress = progress) }
-            }
+                commitMessage = commit.commitMessage,
+                onProgress = { sent: Long, total: Long ->
+                    val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
+                    _syncState.update { it.copy(activeTransferProgress = progress) }
+                }
+            )
 
             if (driveUpload.isSuccess) {
                 val fileId = driveUpload.getOrThrow()
@@ -587,15 +590,15 @@ class SyncEngine(
             Log.i(TAG, "Push to Cloudflare R2 completed & broadcast to room: ${commit.commitId}")
             Result.success(Unit)
         } else {
-            val err = uploadResult.exceptionOrNull()?.message ?: "Upload failed"
-            Log.e(TAG, "Upload to Cloudflare R2 failed: $err")
+            val err = uploadError?.message ?: "Upload failed"
+            Log.e(TAG, "World snapshot upload failed: $err")
             _syncState.update {
                 it.copy(
                     currentSyncStatus = SyncStatus.FAILED,
                     lastError = err
                 )
             }
-            Result.failure(uploadResult.exceptionOrNull() ?: Exception(err))
+            Result.failure(uploadError ?: Exception(err))
         }
     }
 
