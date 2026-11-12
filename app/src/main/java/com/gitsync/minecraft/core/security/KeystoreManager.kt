@@ -32,6 +32,7 @@ class KeystoreManager(private val context: Context) {
         // SAF-based Google Drive Shared Folder ("Minecraft Sync")
         private const val KEY_SAF_DRIVE_FOLDER_URI = "saf_drive_folder_uri"
         private const val KEY_SAF_DRIVE_FOLDER_NAME = "saf_drive_folder_name"
+        private const val KEY_GOOGLE_ACCOUNT_EMAIL = "google_account_email"
         private const val KEY_BACKUP_RETENTION_COUNT = "backup_retention_count"
         private const val DEFAULT_RETENTION_COUNT = 5
         private const val KEY_ONBOARDING_COMPLETED = "onboarding_completed"

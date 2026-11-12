@@ -52,6 +52,7 @@ fun OnboardingScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as GitSyncApplication
+    val coroutineScope = rememberCoroutineScope()
     var currentStep by remember { mutableStateOf(1) }
 
     var showFileManagerChooser by remember { mutableStateOf(false) }

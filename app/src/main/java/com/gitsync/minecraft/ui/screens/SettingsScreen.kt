@@ -26,6 +26,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as GitSyncApplication
+    val coroutineScope = rememberCoroutineScope()
     var gracePeriodSec by remember { mutableStateOf(8f) }
     var signalingUrl by remember { mutableStateOf(app.keystoreManager.getSignalingServerUrl()) }
     var roomId by remember { mutableStateOf(app.keystoreManager.getRoomId()) }
