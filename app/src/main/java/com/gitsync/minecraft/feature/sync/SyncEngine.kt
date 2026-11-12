@@ -12,10 +12,10 @@ import com.gitsync.minecraft.core.model.SyncStatus
 import com.gitsync.minecraft.core.networking.ChunkProtocol
 import com.gitsync.minecraft.core.networking.CloudflareStorageClient
 import com.gitsync.minecraft.core.networking.FileTransferSession
-import com.gitsync.minecraft.core.networking.GoogleDriveClient
 import com.gitsync.minecraft.core.networking.SignalingClient
 import com.gitsync.minecraft.core.networking.WebRtcDataChannelManager
 import com.gitsync.minecraft.core.security.KeystoreManager
+import com.gitsync.minecraft.core.storage.SafDriveFolderManager
 import com.gitsync.minecraft.core.storage.McWorldImporter
 import com.gitsync.minecraft.core.storage.MinecraftStorageDetector
 import com.gitsync.minecraft.core.storage.StorageAccessHelper
@@ -62,10 +62,17 @@ class SyncEngine(
         val serverUrl = keystoreManager.getSignalingServerUrl()
         val roomId = keystoreManager.getRoomId()
 
+        val isDriveConnected = keystoreManager.isSafDriveFolderConnected()
+        val driveFolderName = keystoreManager.getSafDriveFolderName() ?: "Minecraft Sync"
+        val driveFolderUri = keystoreManager.getSafDriveFolderUri()?.toString()
+
         _syncState.update {
             it.copy(
                 pairedDeviceId = pairedId,
-                pairedDeviceName = keystoreManager.getPairedDeviceName()
+                pairedDeviceName = keystoreManager.getPairedDeviceName(),
+                isGoogleDriveConnected = isDriveConnected,
+                googleDriveFolderName = driveFolderName,
+                googleDriveFolderUri = driveFolderUri
             )
         }
 
@@ -228,45 +235,41 @@ class SyncEngine(
             )
         }
 
-        // 3. Download snapshot binary from Google Drive (or Cloudflare fallback)
+        // 3. Download snapshot binary from SAF Google Drive Shared Folder (or Cloudflare fallback)
         val tempDir = StorageAccessHelper.getTempDirectory(context)
         val targetArchive = File(tempDir, "$commitId.mcworld")
         var downloadSuccess = false
         var downloadErrorMsg: String? = null
 
-        val driveFolderId = keystoreManager.getDriveSharedFolderId()
-        val googleToken = keystoreManager.getGoogleAccessToken()
-
-        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
-            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
-            // If downloadUrl is a drive file ID or if we lookup by commitId
-            var driveFileId = if (downloadUrl.startsWith("drive:")) downloadUrl.removePrefix("drive:") else ""
-            if (driveFileId.isBlank()) {
-                val listRes = driveClient.listWorldSnapshots(driveFolderId, worldId)
-                if (listRes.isSuccess) {
-                    val match = listRes.getOrNull()?.find { it.name.contains(commitId) || it.customProperties["commitId"] == commitId }
-                    if (match != null) driveFileId = match.fileId
+        val safDriveUri = keystoreManager.getSafDriveFolderUri()
+        if (safDriveUri != null) {
+            val safManager = SafDriveFolderManager(context) { keystoreManager.getSafDriveFolderUri() }
+            val driveListRes = safManager.listBackupsInDrive(worldId)
+            if (driveListRes.isSuccess) {
+                val candidate = driveListRes.getOrNull()?.find {
+                    it.commitId == commitId || it.fileName.contains(commitId) || (it.sha256Checksum != null && sha256.startsWith(it.sha256Checksum))
                 }
-            }
 
-            if (driveFileId.isNotBlank()) {
-                Log.i(TAG, "Downloading world snapshot from shared Google Drive file $driveFileId")
-                val driveDownload = driveClient.downloadSnapshotArchive(
-                    driveFileId = driveFileId,
-                    targetFile = targetArchive,
-                    expectedSha256 = sha256,
-                    onProgress = { bytesRead: Long, totalBytes: Long ->
-                        val progress = if (totalBytes > 0) bytesRead.toFloat() / totalBytes.toFloat() else 0f
-                        _syncState.update {
-                            it.copy(currentSyncStatus = SyncStatus.RECEIVING, activeTransferProgress = progress)
+                if (candidate != null) {
+                    Log.i(TAG, "Downloading world snapshot from SAF Google Drive folder: ${candidate.fileName}")
+                    val downloadRes = safManager.downloadBackupFromDrive(
+                        backupFile = candidate,
+                        destinationFile = targetArchive,
+                        expectedSha256 = sha256,
+                        onProgress = { bytesDownloaded: Long, totalBytes: Long ->
+                            val progress = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes.toFloat() else 0f
+                            _syncState.update {
+                                it.copy(currentSyncStatus = SyncStatus.RECEIVING, activeTransferProgress = progress)
+                            }
                         }
+                    )
+
+                    if (downloadRes.isSuccess) {
+                        downloadSuccess = true
+                    } else {
+                        downloadErrorMsg = downloadRes.exceptionOrNull()?.message
+                        Log.w(TAG, "SAF Google Drive download failed: $downloadErrorMsg, testing fallback")
                     }
-                )
-                if (driveDownload.isSuccess) {
-                    downloadSuccess = true
-                } else {
-                    downloadErrorMsg = driveDownload.exceptionOrNull()?.message
-                    Log.w(TAG, "Drive download failed: $downloadErrorMsg, checking fallback")
                 }
             }
         }
@@ -508,41 +511,37 @@ class SyncEngine(
             )
         }
 
-        val driveFolderId = keystoreManager.getDriveSharedFolderId()
-        val googleToken = keystoreManager.getGoogleAccessToken()
+        val safDriveUri = keystoreManager.getSafDriveFolderUri()
         var uploadSuccess = false
         var publishedUrl = ""
         var uploadError: Throwable? = null
 
-        // 1. Primary: Google Drive Shared Folder Upload
-        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
-            Log.i(TAG, "Uploading world snapshot to Google Drive folder $driveFolderId")
-            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
-            val driveUpload = driveClient.uploadSnapshotArchive(
-                folderId = driveFolderId,
+        // 1. Primary: SAF Google Drive Shared Folder Upload
+        if (safDriveUri != null) {
+            Log.i(TAG, "Uploading world snapshot to SAF Google Drive folder: $safDriveUri")
+            val safManager = SafDriveFolderManager(context) { keystoreManager.getSafDriveFolderUri() }
+            val uploadRes = safManager.uploadBackupToDrive(
                 worldId = commit.worldId,
                 commitId = commit.commitId,
-                archiveFile = file,
+                localBackupFile = file,
                 expectedSha256 = commit.sha256Checksum,
                 authorName = commit.authorName,
                 deviceId = commit.deviceId,
-                commitMessage = commit.commitMessage,
                 onProgress = { sent: Long, total: Long ->
                     val progress = if (total > 0) sent.toFloat() / total.toFloat() else 0f
                     _syncState.update { it.copy(activeTransferProgress = progress) }
                 }
             )
 
-            if (driveUpload.isSuccess) {
-                val fileId = driveUpload.getOrThrow()
-                publishedUrl = "drive:$fileId"
+            if (uploadRes.isSuccess) {
+                val uploaded = uploadRes.getOrThrow()
+                publishedUrl = "saf_drive:${uploaded.fileName}"
                 uploadSuccess = true
-                Log.i(TAG, "Snapshot uploaded to Google Drive with file ID $fileId. Enforcing retention.")
-                // Enforce retention (keeps latest 5 backups per device, never deletes conflict backups)
-                driveClient.enforceRetention(driveFolderId, commit.worldId, keystoreManager.getBackupRetentionCount())
+                Log.i(TAG, "Snapshot uploaded to SAF Google Drive folder: ${uploaded.fileName}. Enforcing retention.")
+                safManager.enforceRetention(commit.worldId, keystoreManager.getBackupRetentionCount())
             } else {
-                uploadError = driveUpload.exceptionOrNull()
-                Log.w(TAG, "Google Drive upload failed: ${uploadError?.message}. Attempting fallback.")
+                uploadError = uploadRes.exceptionOrNull()
+                Log.w(TAG, "SAF Google Drive upload failed: ${uploadError?.message}. Attempting fallback.")
             }
         }
 
@@ -606,29 +605,28 @@ class SyncEngine(
      * Manual PULL or device-switching check: fetches latest remote snapshot from Google Drive (or Cloudflare fallback).
      */
     suspend fun pullLatest(worldId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val driveFolderId = keystoreManager.getDriveSharedFolderId()
-        val googleToken = keystoreManager.getGoogleAccessToken()
+        val safDriveUri = keystoreManager.getSafDriveFolderUri()
 
-        if (!googleToken.isNullOrBlank() && !driveFolderId.isNullOrBlank()) {
-            val driveClient = GoogleDriveClient(context) { keystoreManager.getGoogleAccessToken() }
-            val listRes = driveClient.listWorldSnapshots(driveFolderId, worldId)
+        // 1. Primary: Check SAF Google Drive Shared Folder for latest backup
+        if (safDriveUri != null) {
+            val safManager = SafDriveFolderManager(context) { keystoreManager.getSafDriveFolderUri() }
+            val listRes = safManager.listBackupsInDrive(worldId)
             if (listRes.isSuccess) {
                 val latestDriveFile = listRes.getOrNull()?.firstOrNull()
                 if (latestDriveFile != null) {
-                    val commitId = latestDriveFile.customProperties["commitId"]
-                        ?: latestDriveFile.name.substringAfter("--").substringBefore(".mcworld")
-                    val sha256 = latestDriveFile.customProperties["sha256"] ?: ""
-                    val authorName = latestDriveFile.customProperties["authorName"] ?: "Friend (Drive)"
-                    val downloadUrl = "drive:${latestDriveFile.fileId}"
+                    val commitId = latestDriveFile.commitId
+                    val sha256 = latestDriveFile.sha256Checksum ?: ""
+                    val authorName = "Drive Backup (${latestDriveFile.fileName})"
+                    val downloadUrl = "saf_drive:${latestDriveFile.fileName}"
 
-                    Log.i(TAG, "Pulling newest snapshot from Google Drive: commit=$commitId, file=${latestDriveFile.fileId}")
+                    Log.i(TAG, "Pulling newest snapshot from SAF Google Drive folder: commit=$commitId, file=${latestDriveFile.fileName}")
                     handleRemoteSyncNotification(worldId, commitId, sha256, downloadUrl, authorName)
                     return@withContext Result.success(Unit)
                 }
             }
         }
 
-        // Fallback: Query Cloudflare Worker
+        // 2. Fallback: Query Cloudflare Worker
         val storageClient = CloudflareStorageClient(keystoreManager.getStorageUrl())
         val latestMetaResult = storageClient.getLatestRemoteSnapshot(worldId)
         val json = latestMetaResult.getOrNull()

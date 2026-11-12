@@ -8,7 +8,6 @@ import androidx.lifecycle.viewModelScope
 import com.gitsync.minecraft.GitSyncApplication
 import com.gitsync.minecraft.core.database.CommitEntity
 import com.gitsync.minecraft.core.database.SharedWorldEntity
-import com.gitsync.minecraft.core.networking.GoogleDriveClient
 import com.gitsync.minecraft.core.model.*
 import com.gitsync.minecraft.core.storage.*
 import com.gitsync.minecraft.feature.backup.BackupEngine
@@ -321,30 +320,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         syncEngine.start()
     }
 
-    fun setGoogleAccount(email: String, accessToken: String) {
-        app.keystoreManager.setGoogleAccount(email, accessToken)
+    val safDriveFolderManager = SafDriveFolderManager(app) { app.keystoreManager.getSafDriveFolderUri() }
+
+    private val _safVerificationStatus = MutableStateFlow<SafDriveFolderManager.SafVerificationResult?>(null)
+    val safVerificationStatus: StateFlow<SafDriveFolderManager.SafVerificationResult?> = _safVerificationStatus.asStateFlow()
+
+    fun connectSafDriveFolder(uri: Uri) {
+        val folderDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, uri)
+        val folderName = folderDoc?.name ?: "Minecraft Sync"
+        app.keystoreManager.setSafDriveFolderUri(uri, folderName)
+
         viewModelScope.launch {
-            val driveClient = GoogleDriveClient(app) { accessToken }
-            val folderRes = driveClient.getOrCreateSyncFolder()
-            if (folderRes.isSuccess) {
-                val folderId = folderRes.getOrThrow()
-                app.keystoreManager.setDriveSharedFolder(folderId)
-                val friendEmail = app.keystoreManager.getFriendGoogleEmail()
-                if (!friendEmail.isNullOrBlank()) {
-                    driveClient.shareFolderWithFriend(folderId, friendEmail)
-                }
+            val result = safDriveFolderManager.verifyFolderReadWriteAccess()
+            _safVerificationStatus.value = result
+            if (result.isSuccessful) {
+                Log.i("MainViewModel", "SAF Google Drive folder verified: $folderName")
+            } else {
+                Log.w("MainViewModel", "SAF Google Drive folder verification warning: ${result.errorMessage}")
             }
+            syncEngine.start()
         }
     }
 
-    fun setFriendGoogleEmail(friendEmail: String) {
-        app.keystoreManager.setFriendGoogleEmail(friendEmail)
-        val folderId = app.keystoreManager.getDriveSharedFolderId()
-        val token = app.keystoreManager.getGoogleAccessToken()
-        if (!folderId.isNullOrBlank() && !token.isNullOrBlank() && friendEmail.isNotBlank()) {
-            viewModelScope.launch {
-                val driveClient = GoogleDriveClient(app) { token }
-                driveClient.shareFolderWithFriend(folderId, friendEmail)
+    fun testSafDriveFolder() {
+        viewModelScope.launch {
+            _safVerificationStatus.value = safDriveFolderManager.verifyFolderReadWriteAccess()
+        }
+    }
+
+    fun openZArchiverToMinecraft(): Boolean {
+        val pm = app.packageManager
+        val zarchiverPackages = listOf("ru.zdevs.zarchiver.pro", "ru.zdevs.zarchiver")
+        for (pkg in zarchiverPackages) {
+            val launchIntent = pm.getLaunchIntentForPackage(pkg)
+            if (launchIntent != null) {
+                launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                app.startActivity(launchIntent)
+                return true
+            }
+        }
+        // Fallback: Open Google Play store page for ZArchiver
+        try {
+            val storeIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse("market://details?id=ru.zdevs.zarchiver")).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            app.startActivity(storeIntent)
+        } catch (_: Exception) {
+            val webIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver")).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            app.startActivity(webIntent)
+        }
+        return false
+    }
+
+    fun handleIncomingSharedBackup(fileUri: Uri) {
+        viewModelScope.launch {
+            try {
+                val tempDir = StorageAccessHelper.getTempDirectory(app)
+                val targetFile = File(tempDir, "shared_import_${System.currentTimeMillis()}.mcworld")
+                app.contentResolver.openInputStream(fileUri)?.use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                val importer = McWorldImporter(app)
+                if (importer.validateArchiveStructure(targetFile)) {
+                    Log.i("MainViewModel", "Shared backup from ZArchiver/Files validated: ${targetFile.name}")
+                    val activeId = selectedWorldId.value ?: "SurvivalWorld"
+                    val worldsDir = if (MinecraftStorageDetector.LEGACY_WORLDS_DIR.exists() && MinecraftStorageDetector.LEGACY_WORLDS_DIR.canWrite()) {
+                        MinecraftStorageDetector.LEGACY_WORLDS_DIR
+                    } else {
+                        MinecraftStorageDetector.SCOPED_WORLDS_DIR
+                    }
+                    val targetFolder = File(worldsDir, activeId)
+                    if (storageCapability.value.isWriteAvailable) {
+                        importer.atomicStagedReplacement(targetFile, targetFolder)
+                        scanWorlds()
+                    } else {
+                        val viewIntent = importer.createMinecraftImportIntent(targetFile)
+                        app.startActivity(viewIntent)
+                    }
+                } else {
+                    Log.e("MainViewModel", "Imported file does not have valid Bedrock structure")
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error handling shared backup URI", e)
             }
         }
     }

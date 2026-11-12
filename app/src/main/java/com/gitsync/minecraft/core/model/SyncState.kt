@@ -16,9 +16,8 @@ data class SyncState(
     val hasUnresolvedConflict: Boolean = false,
     val conflictingCommitA: Commit? = null,
     val conflictingCommitB: Commit? = null,
-    val googleAccountEmail: String? = null,
-    val googleDriveFolderId: String? = null,
     val isGoogleDriveConnected: Boolean = false,
-    val googleDriveStorageUsedBytes: Long = 0L,
-    val googleDriveStorageLimitBytes: Long = 15L * 1024L * 1024L * 1024L // 15 GB free quota
+    val googleDriveFolderName: String = "Minecraft Sync",
+    val googleDriveFolderUri: String? = null,
+    val lastDriveSyncTimestamp: Long = 0L
 )

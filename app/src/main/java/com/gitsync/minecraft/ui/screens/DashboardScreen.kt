@@ -291,14 +291,35 @@ private fun StatusHeaderCard(
             Spacer(modifier = Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
+                    imageVector = Icons.Default.CloudSync,
+                    contentDescription = null,
+                    tint = if (syncState.isGoogleDriveConnected) EmeraldLight else GoldWarning,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (syncState.isGoogleDriveConnected) {
+                        "Google Drive (SAF): ${syncState.googleDriveFolderName ?: "Minecraft Sync"}"
+                    } else {
+                        "Google Drive (SAF): Not Connected"
+                    },
+                    fontSize = 11.sp,
+                    color = if (syncState.isGoogleDriveConnected) EmeraldLight else GoldWarning,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
                     imageVector = Icons.Default.Cloud,
                     contentDescription = null,
                     tint = EmeraldLight,
                     modifier = Modifier.size(14.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Cloudflare Room: friendgroup123 • R2 Storage Active",
+                    text = "Cloudflare Room: friendgroup123 (WebSocket Notifications)",
                     fontSize = 11.sp,
                     color = TextSecondary,
                     fontFamily = FontFamily.Monospace

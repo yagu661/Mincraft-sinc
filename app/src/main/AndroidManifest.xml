@@ -79,6 +79,13 @@
                 <data android:mimeType="application/*" />
                 <data android:pathPattern=".*\\.mcworld" />
             </intent-filter>
+
+            <!-- Allow receiving backups shared from ZArchiver or file managers via Share / Send -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <!-- WorkManager Foreground Service Configuration -->

@@ -48,17 +48,11 @@ fun OnboardingScreen(
     storageCapability: StorageCapability,
     hasUsagePermission: Boolean,
     onSaveSafUri: (Uri) -> Unit,
-    onConnectGoogle: (email: String, token: String) -> Unit,
-    onSetFriendEmail: (String) -> Unit,
     onFinishOnboarding: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as GitSyncApplication
     var currentStep by remember { mutableStateOf(1) }
-
-    var inputGoogleEmail by remember { mutableStateOf(app.keystoreManager.getGoogleAccountEmail() ?: "") }
-    var inputGoogleToken by remember { mutableStateOf(app.keystoreManager.getGoogleAccessToken() ?: "") }
-    var inputFriendEmail by remember { mutableStateOf(app.keystoreManager.getFriendGoogleEmail() ?: "") }
 
     var showFileManagerChooser by remember { mutableStateOf(false) }
 
@@ -250,95 +244,147 @@ fun OnboardingScreen(
                 }
             }
 
-            // STEP 3: GOOGLE DRIVE SHARED FOLDER CONFIGURATION
+            // STEP 3: GOOGLE DRIVE SHARED FOLDER CONFIGURATION (SAF)
             if (currentStep == 3) {
                 item {
+                    val safFolderConnected = app.keystoreManager.isSafDriveFolderConnected()
+                    val safFolderName = app.keystoreManager.getSafDriveFolderName()
+                    var testStatus by remember { mutableStateOf<String?>(null) }
+                    val safManager = remember { com.gitsync.minecraft.core.storage.SafDriveFolderManager(context) { app.keystoreManager.getSafDriveFolderUri() } }
+                    val coroutineScope = rememberCoroutineScope()
+
+                    val driveLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.OpenDocumentTree()
+                    ) { uri: Uri? ->
+                        if (uri != null) {
+                            try {
+                                context.contentResolver.takePersistableUriPermission(
+                                    uri,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.w("OnboardingScreen", "Failed to take persistable URI permission", e)
+                            }
+                            val folderDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                            val folderName = folderDoc?.name ?: "Minecraft Sync"
+                            app.keystoreManager.setSafDriveFolderUri(uri, folderName)
+                            coroutineScope.launch {
+                                val res = safManager.verifyFolderReadWriteAccess()
+                                testStatus = if (res.isSuccessful) {
+                                    "Connected & Verified: '$folderName' (Read/Write OK)"
+                                } else {
+                                    "Warning: ${res.errorMessage}"
+                                }
+                            }
+                        }
+                    }
+
                     OnboardingStepCard(
                         stepNumber = "3",
-                        icon = Icons.Default.CloudUpload,
-                        title = "Google Drive Shared Folder",
-                        subtitle = "Transfers actual Minecraft .mcworld files across your Google accounts.",
-                        statusText = if (inputGoogleEmail.isNotBlank()) "ACCOUNT CONFIGURED" else "ENTER ACCOUNT",
-                        isComplete = inputGoogleEmail.isNotBlank()
+                        icon = Icons.Default.CloudSync,
+                        title = "Shared Google Drive Folder",
+                        subtitle = "Select the shared 'Minecraft Sync' folder from Google Drive via SAF.",
+                        statusText = if (safFolderConnected) "FOLDER CONNECTED" else "SELECTION NEEDED",
+                        isComplete = safFolderConnected
                     ) {
                         Column {
                             Text(
-                                text = "Your world files are stored in a dedicated Google Drive folder ('Minecraft_Bedrock_Sync') and shared with your friend. Each account keeps its own 15 GB quota.",
+                                text = "Pure Storage Access Framework (SAF) integration — No Google Cloud Console billing, OAuth client IDs, or API keys needed!\n\n" +
+                                        "Both you and your friend independently select the shared folder using your own Google accounts in the Android folder picker.",
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
 
-                            OutlinedTextField(
-                                value = inputGoogleEmail,
-                                onValueChange = { inputGoogleEmail = it },
-                                label = { Text("Your Google Account Email") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
+                            if (safFolderConnected && safFolderName != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(GraphiteCardElevated, RoundedCornerShape(8.dp))
+                                        .padding(10.dp)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StatusSynced, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Folder: $safFolderName",
+                                        color = EmeraldLight,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
 
-                            OutlinedTextField(
-                                value = inputGoogleToken,
-                                onValueChange = { inputGoogleToken = it },
-                                label = { Text("OAuth Access Token / Bearer Token") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { driveLauncher.launch(null) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(if (safFolderConnected) "CHANGE FOLDER" else "CONNECT SHARED FOLDER", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
 
-                            Button(
-                                onClick = {
-                                    if (inputGoogleEmail.isNotBlank()) {
-                                        onConnectGoogle(inputGoogleEmail.trim(), inputGoogleToken.trim())
+                                if (safFolderConnected) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val res = safManager.verifyFolderReadWriteAccess()
+                                                testStatus = if (res.isSuccessful) {
+                                                    "Verification Passed: Read, Write & Delete operations confirmed!"
+                                                } else {
+                                                    "Verification Failed: ${res.errorMessage}"
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("TEST ACCESS", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("SAVE & INITIALIZE DRIVE SYNC FOLDER", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                            }
+
+                            if (testStatus != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = testStatus!!,
+                                    color = EmeraldLight,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // STEP 4: FRIEND'S GOOGLE ACCOUNT SHARING & COMPLETION
+            // STEP 4: NOTIFICATIONS & SETUP COMPLETION
             if (currentStep == 4) {
                 item {
                     OnboardingStepCard(
                         stepNumber = "4",
-                        icon = Icons.Default.GroupAdd,
-                        title = "Friend Sharing & Notifications",
-                        subtitle = "Share the Drive folder with your friend's Google email address.",
+                        icon = Icons.Default.DoneAll,
+                        title = "Automatic Sync & Room Notifications",
+                        subtitle = "Cloudflare WebSocket coordinator & Git-style world synchronization.",
                         statusText = "FINAL STEP",
-                        isComplete = inputFriendEmail.isNotBlank()
+                        isComplete = true
                     ) {
                         Column {
                             Text(
-                                text = "Enter your friend's Google Account email. The sync folder will be automatically shared with them with 'writer' permissions so their phone can sync world backups.",
+                                text = "Your setup is complete! GitSync uses your Cloudflare room ('friendgroup123') for coordination and editing leases, and transfers world backups directly to and from your shared Google Drive folder.\n\n" +
+                                        "Whenever either player finishes playing Minecraft, GitSync creates a safe snapshot and syncs it with SHA-256 integrity checks.",
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            OutlinedTextField(
-                                value = inputFriendEmail,
-                                onValueChange = { inputFriendEmail = it },
-                                label = { Text("Friend's Google Email Address") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
 
                             Button(
-                                onClick = {
-                                    if (inputFriendEmail.isNotBlank()) {
-                                        onSetFriendEmail(inputFriendEmail.trim())
-                                    }
-                                    onFinishOnboarding()
-                                },
+                                onClick = onFinishOnboarding,
                                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()

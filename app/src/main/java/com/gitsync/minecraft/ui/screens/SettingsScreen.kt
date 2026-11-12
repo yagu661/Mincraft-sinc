@@ -101,6 +101,213 @@ fun SettingsScreen(
                 }
             }
 
+            // MINECRAFT STORAGE & ZARCHIVER INTEGRATION
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, EmeraldPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = GraphiteCardElevated),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.FolderZip, contentDescription = null, tint = EmeraldLight)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "MINECRAFT STORAGE & ZARCHIVER",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Minecraft Bedrock External storage directory on Android:\n" +
+                                    "/storage/emulated/0/Android/data/com.mojang.minecraftpe/files/games/com.mojang/minecraftWorlds/",
+                            fontSize = 11.sp,
+                            color = EmeraldLight,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "To access this folder directly on Android 11 or Android 15, use ZArchiver to view world folders or export .mcworld backups. You can share .mcworld files directly to GitSync.",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = {
+                                val pm = context.packageManager
+                                val zPackages = listOf("ru.zdevs.zarchiver.pro", "ru.zdevs.zarchiver")
+                                var launched = false
+                                for (pkg in zPackages) {
+                                    val launchIntent = pm.getLaunchIntentForPackage(pkg)
+                                    if (launchIntent != null) {
+                                        launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        context.startActivity(launchIntent)
+                                        launched = true
+                                        break
+                                    }
+                                }
+                                if (!launched) {
+                                    try {
+                                        val marketIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=ru.zdevs.zarchiver")).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(marketIntent)
+                                    } catch (_: Exception) {
+                                        val webIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver")).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(webIntent)
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("OPEN MINECRAFT STORAGE WITH ZARCHIVER", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            // GOOGLE DRIVE (SAF - NO BILLING / NO CONSOLE)
+            item {
+                val driveFolderName = app.keystoreManager.getSafDriveFolderName()
+                val isConnected = app.keystoreManager.isSafDriveFolderConnected()
+                var driveStatusMsg by remember { mutableStateOf<String?>(null) }
+                val safManager = remember { com.gitsync.minecraft.core.storage.SafDriveFolderManager(context) { app.keystoreManager.getSafDriveFolderUri() } }
+                val coroutineScope = rememberCoroutineScope()
+
+                val driveFolderPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                    contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+                ) { uri ->
+                    if (uri != null) {
+                        try {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.w("SettingsScreen", "Failed to take persistable URI permission", e)
+                        }
+                        val folderDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                        val folderName = folderDoc?.name ?: "Minecraft Sync"
+                        app.keystoreManager.setSafDriveFolderUri(uri, folderName)
+                        coroutineScope.launch {
+                            val res = safManager.verifyFolderReadWriteAccess()
+                            driveStatusMsg = if (res.isSuccessful) {
+                                "Connected & Verified: '$folderName' (Read/Write OK)"
+                            } else {
+                                "Warning: ${res.errorMessage}"
+                            }
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, GraphiteCardBorder, RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = GraphiteCard),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CloudSync, contentDescription = null, tint = EmeraldLight)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "SHARED GOOGLE DRIVE FOLDER (SAF)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextMuted,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Connect your shared 'Minecraft Sync' Google Drive folder using Android's Storage Access Framework. " +
+                                    "No Google Cloud Console billing, OAuth client IDs, or API keys required. " +
+                                    "Both you and your friend independently select the shared folder using your own Google accounts.",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        if (isConnected && driveFolderName != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(GraphiteCardElevated, RoundedCornerShape(8.dp))
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StatusSynced, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Connected Folder: $driveFolderName",
+                                    color = EmeraldLight,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { driveFolderPicker.launch(null) },
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary, contentColor = GraphiteBackground),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (isConnected) "CHANGE FOLDER" else "CONNECT FOLDER", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+
+                            if (isConnected) {
+                                OutlinedButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            val res = safManager.verifyFolderReadWriteAccess()
+                                            driveStatusMsg = if (res.isSuccessful) {
+                                                "Verification Passed: Read, Write & Delete operations confirmed!"
+                                            } else {
+                                                "Verification Failed: ${res.errorMessage}"
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("TEST READ/WRITE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        if (driveStatusMsg != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = driveStatusMsg!!,
+                                color = EmeraldLight,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+
             item {
                 Card(
                     modifier = Modifier

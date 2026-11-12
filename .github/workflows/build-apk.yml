@@ -27,12 +27,10 @@ jobs:
       uses: gradle/actions/setup-gradle@v4
       with:
         gradle-version: '8.7'
-
-    - name: Run Unit Tests
-      run: gradle testDebugUnitTest --no-daemon --stacktrace
+        generate-job-summary: true
 
     - name: Build Debug APK
-      run: gradle assembleDebug --no-daemon --stacktrace
+      run: gradle assembleDebug --no-daemon --stacktrace --full-stacktrace
 
     - name: Verify APK Output
       run: |

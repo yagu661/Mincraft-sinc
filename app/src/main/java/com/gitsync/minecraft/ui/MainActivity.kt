@@ -1,5 +1,7 @@
 package com.gitsync.minecraft.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,6 +22,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIntent(intent)
 
         setContent {
             MinecraftGitSyncTheme {
@@ -30,6 +33,32 @@ class MainActivity : ComponentActivity() {
                     AppNavigation(viewModel)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        val uri: Uri? = when (action) {
+            Intent.ACTION_SEND -> {
+                val clip = intent.clipData
+                if (clip != null && clip.itemCount > 0) {
+                    clip.getItemAt(0).uri
+                } else {
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+            }
+            Intent.ACTION_VIEW -> intent.data
+            else -> null
+        }
+
+        if (uri != null) {
+            viewModel.handleIncomingSharedBackup(uri)
         }
     }
 
@@ -59,8 +88,6 @@ fun AppNavigation(viewModel: MainViewModel) {
                 storageCapability = storageCapability,
                 hasUsagePermission = hasUsagePermission,
                 onSaveSafUri = { viewModel.saveAuthorizedSafUri(it) },
-                onConnectGoogle = { email, token -> viewModel.setGoogleAccount(email, token) },
-                onSetFriendEmail = { viewModel.setFriendGoogleEmail(it) },
                 onFinishOnboarding = { viewModel.completeOnboarding() }
             )
         }

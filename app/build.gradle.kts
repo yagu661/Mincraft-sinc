@@ -23,10 +23,6 @@ android {
 
         buildConfigField("String", "TARGET_DEVICE_PROFILE", "\"Samsung Galaxy M30s - Android 11 Compat\"")
         buildConfigField("String", "MINECRAFT_EXPECTED_PATH", "\"/storage/emulated/0/Android/data/com.mojang.minecraftpe/files/games/com.mojang/minecraftWorlds/\"")
-
-        ksp {
-            arg("room.schemaLocation", "$projectDir/schemas")
-        }
     }
 
     buildTypes {

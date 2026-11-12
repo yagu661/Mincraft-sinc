@@ -37,8 +37,8 @@ class AutoSnapshotWorker(
             val commit = result.getOrThrow()
             Log.i(TAG, "Automatic snapshot successfully generated: ${commit.commitId}")
 
-            // If a paired friend exists, enqueue DirectPushWorker to send over WebRTC automatically
-            if (app.keystoreManager.getPairedDeviceId() != null) {
+            // If a paired friend or connected Google Drive SAF folder exists, enqueue DirectPushWorker automatically
+            if (app.keystoreManager.getPairedDeviceId() != null || app.keystoreManager.isSafDriveFolderConnected()) {
                 val pushRequest = OneTimeWorkRequestBuilder<DirectPushWorker>().build()
                 WorkManager.getInstance(applicationContext).enqueue(pushRequest)
             }
